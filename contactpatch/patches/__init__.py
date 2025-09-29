@@ -1,0 +1,1 @@
+from contactpatch.patches.polygon import PolygonContactPatch
