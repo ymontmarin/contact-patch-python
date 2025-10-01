@@ -22,7 +22,7 @@ class PolygonContactPatch:
 
         Where F = [fx1,fy1,fz1,...,fx1,fy1,fz1] (3n)
         The unflatten version is fis = [[fx1,fy1,fz1],
-                                           ...
+                                             ...
                                         [fxn,fyn,fzn]]
 
         A = [[ B1  ...  Bn ]
