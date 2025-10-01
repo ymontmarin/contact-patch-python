@@ -357,7 +357,7 @@ class PolygonContactPatch:
         l *= self.aat_inv
         return l
 
-    def apply_pinvA(self, l, _out=None):
+    def apply_A_pinv(self, l, _out=None):
         return self.apply_AT(self.apply_AAT_inv(l), _out=_out)
 
     def apply_ATA(self, fis, _out=None):
@@ -516,7 +516,9 @@ class PolygonContactPatch:
         """
         Check if F is in K_mu^n
         """
-        return np.all(np.linalg.norm(fis[:,:2], axis=1) <= (self.mu * fis[:, 2]))
+        norms = np.linalg.norm(fis[:,:2], axis=1)
+        muzs = self.mu * fis[:, 2]
+        return np.all(np.logical_or(norms <= muzs, np.isclose(norms, muzs)))
 
     def is_inside_cone(self, l, pinv_l=None, do_solve=True):
         """
@@ -534,7 +536,7 @@ class PolygonContactPatch:
         => boils down to project and check identity P^2 = P
         """
         if pinv_l is None:
-            pinv_l = self.apply_pinvA(l)
+            pinv_l = self.apply_A_pinv(l)
         if self.is_inside_hidden_cone(pinv_l):
             return True
         if self.ker_precompute and self.reject_nc_ker(pinv_l):
@@ -624,8 +626,15 @@ class PolygonContactPatch:
 
         return np.stack([r * np.cos(t), r * np.sin(t), h], axis=1)
 
-    def generate_point_cone(self):
+    def generate_point_in_hidden_cone_space(self):
+        return np.random.randn(self.n, 3)
+
+    def generate_point_in_cone(self):
         return self.apply_A(self.generate_point_in_hidden_cone())
+
+    def generate_point_in_cone_space(self):
+        return np.random.randn(6)
+
 
     """
     Cone projection:
@@ -633,7 +642,7 @@ class PolygonContactPatch:
     """
     def project_hidden_cone(self, fis, _out=None):
         """
-        Check if F is in K_mu^n
+        Project in K_mu^n
         """
         if _out is None:
             _out = np.zeros(fis.shape)
@@ -641,25 +650,23 @@ class PolygonContactPatch:
         norm_xy = np.linalg.norm(xy, axis=1)
         z = fis[:, 2]
 
+        almost_vertical = norm_xy < 1e-10
         inside_cone = np.logical_and(z >= 0, norm_xy <= self.mu * z)
-        inside_polar_cone = np.logical_and(
-            z < 0,
-            np.logical_or(
-                norm_xy <= (-1 / self.mu) * z,
-                norm_xy < 1e-10
-            )
-        )
+        inside_polar_cone = np.logical_and(z < 0, np.logical_or(norm_xy <= (-1 / self.mu) * z,almost_vertical))
+
         not_cones = np.logical_not(np.logical_or(inside_cone, inside_polar_cone))
-        numerical_area = np.logical_and(not_cones, norm_xy < 1e-10)
+        numerical_area = np.logical_and(not_cones, almost_vertical)
         rest = np.logical_and(not_cones, np.logical_not(numerical_area))
 
         _out[inside_cone] = fis[inside_cone]
         _out[inside_polar_cone] = 0.
         _out[numerical_area, :2] = 0.
 
-        alpha = (self.mu * z[rest] + norm_xy[rest]) / (self.mu**2 + 1)
+        alpha = (z[rest] + self.mu * norm_xy[rest]) / (self.mu**2 + 1)
+        alpha = np.clip(alpha, 0., None)
         _out[rest, :2] = alpha[:, np.newaxis] * self.mu * xy[rest] / norm_xy[rest, np.newaxis]
         _out[rest, 2] = alpha
+
         return _out
 
 
@@ -670,22 +677,20 @@ class PolygonContactPatch:
         norm_xy = np.linalg.norm(fis[:,:2], axis=1)
         z = fis[:, 2]
 
+        almost_vertical = norm_xy < 1e-10
         inside_cone = np.logical_and(z >= 0, norm_xy <= self.mu * z)
-        inside_polar_cone = np.logical_and(
-            z < 0,
-            np.logical_or(
-                norm_xy <= (-1 / self.mu) * z,
-                norm_xy < 1e-10
-            )
-        )
+        inside_polar_cone = np.logical_and(z < 0, np.logical_or(norm_xy <= (-1 / self.mu) * z,almost_vertical))
+
         not_cones = np.logical_not(np.logical_or(inside_cone, inside_polar_cone))
-        numerical_area = np.logical_and(not_cones, norm_xy < 1e-10)
+        numerical_area = np.logical_and(not_cones, almost_vertical)
         rest = np.logical_and(not_cones, np.logical_not(numerical_area))
 
         fis[inside_polar_cone] = 0.
         fis[numerical_area, :2] = 0.
 
-        alpha = (self.mu * z[rest] + norm_xy[rest]) / (self.mu**2 + 1)
+        alpha = (z[rest] + self.mu * norm_xy[rest]) / (self.mu**2 + 1)
+        alpha = np.clip(alpha, 0., None)
+
         fis[rest, :2] *= (alpha * self.mu / norm_xy[rest])[:, np.newaxis]
         fis[rest, 2] = alpha
         return fis
@@ -694,13 +699,13 @@ class PolygonContactPatch:
         """
         Check if F is in K_mu^n
         """
-        pinv_l = self.apply_pinvA(l)
+        pinv_l = self.apply_A_pinv(l)
         if self.is_inside_cone(l, pinv_l=pinv_l, do_solve=False):
             return l
         fis0 = self.get_warmstart(l, pinv_l=pinv_l)
         fis_opti = self.solver.solve(l, fis0=fis0)
         l_proj = self.apply_A(fis_opti)
-        pinv_l_proj = self.apply_pinvA(l)
+        pinv_l_proj = self.apply_A_pinv(l)
         self.update_warmsart(l, l_proj, pinv_l, pinv_l_proj, )
         # Warmstart is done here
         # Call solver

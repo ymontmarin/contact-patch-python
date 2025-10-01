@@ -62,13 +62,28 @@ def test_polygon_linear_algebra_dense():
     assert_close(A @ A_pinv, np.eye(6))
     assert_close(AAT @ AAT_inv, np.eye(6))
 
-
 def test_polygon_linear_algebra_sparse():
     vis = PolygonContactPatch.generate_polygon_vis(N_sample=10, aimed_n=4)
     mu = 2.
     poly = PolygonContactPatch(vis=vis, mu=mu, ker_precompute=True)
     n = poly.n
     rho = .1
+
+    # Generate random elements
+    vfis = poly.generate_point_in_hidden_cone()
+    assert poly.is_inside_hidden_cone(vfis)
+
+    while True:
+        ffis = poly.generate_point_in_hidden_cone_space()
+        if not poly.is_inside_hidden_cone(ffis):
+            break
+
+    vfis_flat = vfis.reshape((3 * n))
+    ffis_flat = ffis.reshape((3 * n))
+
+    vl = poly.generate_point_in_cone()
+    assert poly.is_inside_cone(vl)
+    fl = poly.generate_point_in_cone_space()
 
     A = poly.get_A()
     AT = poly.get_AT()
@@ -80,4 +95,89 @@ def test_polygon_linear_algebra_sparse():
     ATA_pinv = poly.get_ATA_pinv()
     ATA_reg_inv = poly.get_ATA_reg_inv(rho=rho)
 
-    # Random element and apply
+    # Test matrix vector methods
+    assert_close(poly.apply_A(vfis), A @ vfis_flat)
+    assert_close(poly.apply_A(ffis), A @ ffis_flat)
+
+    assert_close(poly.apply_AT(vl).reshape((3 * n,)), AT @ vl)
+    assert_close(poly.apply_AT(fl).reshape((3 * n,)), AT @ fl)
+
+    assert_close(poly.apply_A_pinv(vl).reshape((3 * n,)), A_pinv @ vl)
+    assert_close(poly.apply_A_pinv(fl).reshape((3 * n,)), A_pinv @ fl)
+
+    assert_close(poly.apply_AAT(vl), AAT @ vl)
+    assert_close(poly.apply_AAT(fl), AAT @ fl)
+
+    assert_close(poly.apply_AAT_inv(vl), AAT_inv @ vl)
+    assert_close(poly.apply_AAT_inv(fl), AAT_inv @ fl)
+
+    assert_close(poly.apply_ATA(vfis).reshape((3 * n,)), ATA @ vfis_flat)
+    assert_close(poly.apply_ATA(ffis).reshape((3 * n,)), ATA @ ffis_flat)
+
+    assert_close(poly.apply_ATA_pinv(vfis).reshape((3 * n,)), ATA_pinv @ vfis_flat)
+    assert_close(poly.apply_ATA_pinv(ffis).reshape((3 * n,)), ATA_pinv @ ffis_flat)
+
+    assert_close(poly.apply_ATA_reg_inv(vfis, rho).reshape((3 * n,)), ATA_reg_inv @ vfis_flat)
+    assert_close(poly.apply_ATA_reg_inv(ffis, rho).reshape((3 * n,)), ATA_reg_inv @ ffis_flat)
+
+    # Test inplace methods
+    vl_c = vl.copy()
+    fl_c = fl.copy()
+    poly.apply_AAT_(vl_c)
+    poly.apply_AAT_(fl_c)
+    assert_close(vl_c, AAT @ vl)
+    assert_close(fl_c, AAT @ fl)
+
+    vl_c = vl.copy()
+    fl_c = fl.copy()
+    poly.apply_AAT_inv_(vl_c)
+    poly.apply_AAT_inv_(fl_c)
+    assert_close(vl_c, AAT_inv @ vl)
+    assert_close(fl_c, AAT_inv @ fl)
+
+    vfis_c = vfis.copy()
+    ffis_c = ffis.copy()
+    poly.apply_ATA_(vfis_c)
+    poly.apply_ATA_(ffis_c)
+    assert_close(vfis_c.reshape((3 * n,)), ATA @ vfis_flat)
+    assert_close(ffis_c.reshape((3 * n,)), ATA @ ffis_flat)
+
+    vfis_c = vfis.copy()
+    ffis_c = ffis.copy()
+    poly.apply_ATA_pinv_(vfis_c)
+    poly.apply_ATA_pinv_(ffis_c)
+    assert_close(vfis_c.reshape((3 * n,)), ATA_pinv @ vfis_flat)
+    assert_close(ffis_c.reshape((3 * n,)), ATA_pinv @ ffis_flat)
+
+    vfis_c = vfis.copy()
+    ffis_c = ffis.copy()
+    poly.apply_ATA_reg_inv_(vfis_c, rho)
+    poly.apply_ATA_reg_inv_(ffis_c, rho)
+    assert_close(vfis_c.reshape((3 * n,)), ATA_reg_inv @ vfis_flat)
+    assert_close(ffis_c.reshape((3 * n,)), ATA_reg_inv @ ffis_flat)
+
+def test_polygon_hidden_projection():
+    vis = PolygonContactPatch.generate_polygon_vis(N_sample=10, aimed_n=4)
+    mu = 2.
+    poly = PolygonContactPatch(vis=vis, mu=mu, ker_precompute=True)
+    n = poly.n
+    rho = .1
+
+    # Generate random elements
+    vfis = poly.generate_point_in_hidden_cone()
+    assert_close(vfis, poly.project_hidden_cone(vfis))
+
+    ffis = poly.generate_point_in_hidden_cone_space()
+    p_ffis = poly.project_hidden_cone(ffis)
+
+    assert poly.is_inside_hidden_cone(p_ffis)
+
+    # Test inplace
+    vfis_c = vfis.copy()
+    poly.project_hidden_cone_(vfis_c)
+    assert_close(vfis, vfis_c)
+
+    ffis_c = ffis.copy()
+    poly.project_hidden_cone_(ffis_c)
+    assert_close(p_ffis, ffis_c)
+
