@@ -182,4 +182,3 @@ def test_polygon_hidden_projection():
     ffis_c = ffis.copy()
     poly.project_hidden_cone_(ffis_c)
     assert_close(p_ffis, ffis_c)
-
