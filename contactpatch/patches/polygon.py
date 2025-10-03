@@ -2,8 +2,13 @@ import numpy as np
 import itertools as itt
 import scipy as sc
 
+from contactpatch.coneproject import ProjectedGradient
+
+SOLVERS = {
+    "PGD": ProjectedGradient
+}
 class PolygonContactPatch:
-    def __init__(self, vis, mu, ker_precompute=False):
+    def __init__(self, vis, mu, ker_precompute=False, warmstart_strat=None, solver_tyep='PGD', solver_kwargs=None):
         """
         vis (nx2): the n vertices of a convex polygon P centered in its barycenter and align with principle axis
             Without loss of generality:
@@ -38,7 +43,11 @@ class PolygonContactPatch:
 
         self.mu = mu
         self.n = len(vis)
+        self.hidden_shape = (self.n, 3)
+        self.size = 6
         assert self.n > 2
+
+        self.solver = SOLVERS[solver_tyep](self, **(solver_kwargs if solver_kwargs is not None else {}))
 
         self._force_cone_precompute()
 
@@ -520,7 +529,7 @@ class PolygonContactPatch:
         muzs = self.mu * fis[:, 2]
         return np.all(np.logical_or(norms <= muzs, np.isclose(norms, muzs)))
 
-    def is_inside_cone(self, l, pinv_l=None, do_solve=True):
+    def is_inside_cone(self, l, pinv_l=None, do_solve=False):
         """
         Check if l is in K
         Return True if sure in, False if sure out and None if unsure
@@ -695,32 +704,45 @@ class PolygonContactPatch:
         fis[rest, 2] = alpha
         return fis
 
-    def project_cone(self, l):
+    def project_cone(self, l, _out=None):
         """
         Check if F is in K_mu^n
         """
         pinv_l = self.apply_A_pinv(l)
         if self.is_inside_cone(l, pinv_l=pinv_l, do_solve=False):
             return l
-        fis0 = self.get_warmstart(l, pinv_l=pinv_l)
-        fis_opti = self.solver.solve(l, fis0=fis0)
-        l_proj = self.apply_A(fis_opti)
-        pinv_l_proj = self.apply_A_pinv(l)
-        self.update_warmsart(l, l_proj, pinv_l, pinv_l_proj, )
-        # Warmstart is done here
-        # Call solver
-        # TODO: Correct
-        return l
+
+        # Warmstart
+        if self.warmstart_strat == 'prev' and self.fis_prev is not None:
+            fis0 = self.fis_prev
+        elif self.warmstart_strat == 'prev_linadjust' and self.fis_prev is not None:
+            fis0 = self.project_hidden_cone(self.fis_prev + self.apply_A_pinv(l - self.l_prev))
+        else:
+            fis0 = self.project_hidden_cone(self.apply_A_pinv(l))
+
+        # Update state for warmstart 1
+        self.l_prev = l.copy()
+
+        # Optim solve and retrieve projection
+        fis_opti, success = self.solver.solve(l, x0=fis0)
+        if not success:
+            raise Exception('No solution found')
+
+        proj = self.apply_A(fis_opti, _out=_out)
+
+        # Update state for warmstart 2
+        self.fis_prev = fis_opti.copy()
+        self.proj_prev = proj.copy()
+
+        return proj
+
+    def project_cone_(self, l):
+        return self.project_cone(l, _out=l)
 
     # """
-    # Random cone generation
+    # Patch support function
     # """
 
     # """
-    # Random patch generation
+    # Patch LP
     # """
-
-    # """
-    # Path support function
-    # """
-

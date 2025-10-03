@@ -171,6 +171,8 @@ def test_polygon_hidden_projection():
     p_ffis = poly.project_hidden_cone(ffis)
 
     assert poly.is_inside_hidden_cone(p_ffis)
+    # p°p = p
+    assert_close(poly.project_hidden_cone(p_ffis), p_ffis)
 
     # Test inplace
     vfis_c = vfis.copy()

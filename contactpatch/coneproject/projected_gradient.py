@@ -6,7 +6,6 @@ class ProjectedGradient():
     TODO:
     Add Line Search
     Add adaptive restart
-    Add Warmstart strats
     Init mechanism of options
     """
     def __init__(self, patch, max_iterations=1000, accel=True, precond=True, relcrit=1e-6):
@@ -26,15 +25,15 @@ class ProjectedGradient():
 
     def solve(self, l, x_0=None):
         # Initialize te variables
-        x_k = self.warmstart(l, x_0)
+        x_k = x_0.copy() if x_0 is not None else np.zeros(self.patch.hidden_shape)
         if self.accel:
             # Momentum point variable
             y_k = x_k.copy()
         else:
             # Only an alias
             y_k = x_k
-        x_kp1 = np.zeros_like(x_k)
-        residual = np.zeros(6)
+        x_kp1 = np.zeros(self.patch.hidden_shape)
+        residual = np.zeros(self.patch.size)
         t_k = 1.
 
         for k in range(self.max_iterations):
@@ -55,7 +54,7 @@ class ProjectedGradient():
 
             # Check convergence
             if np.linalg.norm(x_kp1 - x_k) / (np.linalg.norm(x_k) + 1e-10) < self.relcrit:
-                break
+                return x_kp1, True
 
             # Prepare variable for next iterate
             if self.accel:
@@ -72,4 +71,4 @@ class ProjectedGradient():
                 x_k, x_kp1 = x_kp1, x_k
                 y_k = x_k
 
-        return x_kp1
+        return x_k, False
