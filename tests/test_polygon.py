@@ -182,3 +182,37 @@ def test_polygon_hidden_projection():
     ffis_c = ffis.copy()
     poly.project_hidden_cone_(ffis_c)
     assert_close(p_ffis, ffis_c)
+
+def test_projection():
+    vis = PolygonContactPatch.generate_polygon_vis(N_sample=10, aimed_n=4)
+    mu = 2.
+    solver_kwargs = {
+        'max_iterations': 1000,
+        'accel': True,
+        'precond': True,
+        'adaptive_restart': False,
+        'armijo': False,
+        'rel_crit': 1e-6,
+        'verbose': False
+    }
+    poly = PolygonContactPatch(
+        vis=vis,
+        mu=mu,
+        ker_precompute=False,
+        warmstart_strat=None,
+        solver_tyep='PGD',
+        solver_kwargs=solver_kwargs
+    )
+    n = poly.n
+    rho = .1
+
+    vl = poly.generate_point_in_cone()
+    assert poly.is_inside_cone(vl)
+    fl = poly.generate_point_in_cone_space()
+
+    pvl = poly.project_cone(vl)
+    assert_close(vl, pvl)
+
+    pfl = poly.project_cone(fl)
+    ppfl = poly.project_cone(pfl)
+    assert_close(pfl, ppfl)

@@ -8,7 +8,12 @@ SOLVERS = {
     "PGD": ProjectedGradient
 }
 class PolygonContactPatch:
-    def __init__(self, vis, mu, ker_precompute=False, warmstart_strat=None, solver_tyep='PGD', solver_kwargs=None):
+    def __init__(self,
+            vis, mu,
+            ker_precompute=False,
+            warmstart_strat=None,
+            solver_tyep='PGD',
+            solver_kwargs=None):
         """
         vis (nx2): the n vertices of a convex polygon P centered in its barycenter and align with principle axis
             Without loss of generality:
@@ -41,6 +46,7 @@ class PolygonContactPatch:
         """
         self.vis = self.process_polygon(vis)[0]
 
+        self.warmstart_strat = warmstart_strat
         self.mu = mu
         self.n = len(vis)
         self.hidden_shape = (self.n, 3)
