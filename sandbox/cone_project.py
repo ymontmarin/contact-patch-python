@@ -19,7 +19,7 @@ def specialized_admm(A, b, mu, n, rho=1.0):
             X = cholesky_solve(L, rhs)  # O(n²) per iteration
         else:
             X = solve_linear_system(ATA_plus_rhoI, rhs)  # O(n³) per iteration
-        
+
         # 2. Y-update: Parallel SOC projections  
         temp = X + lambda_dual / rho
         for i in range(n):

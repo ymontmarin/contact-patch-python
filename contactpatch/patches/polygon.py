@@ -53,9 +53,9 @@ class PolygonContactPatch:
         self.size = 6
         assert self.n > 2
 
-        self.solver = SOLVERS[solver_tyep](self, **(solver_kwargs if solver_kwargs is not None else {}))
-
         self._force_cone_precompute()
+
+        self.solver = SOLVERS[solver_tyep](self, **(solver_kwargs if solver_kwargs is not None else {}))
 
         # Optional precompute
         self.ker_precompute = ker_precompute
@@ -730,7 +730,7 @@ class PolygonContactPatch:
         self.l_prev = l.copy()
 
         # Optim solve and retrieve projection
-        fis_opti, success = self.solver.solve(l, x0=fis0)
+        fis_opti, success = self.solver.solve(l, x_0=fis0)
         if not success:
             raise Exception('No solution found')
 

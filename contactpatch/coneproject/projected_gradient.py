@@ -14,12 +14,18 @@ class ProjectedGradient():
             precond=True,
             adaptive_restart=False,
             armijo=False,
-            rel_crit=1e-6,
+            rel_crit=1e-4,
+            rel_obj_crit=1e-5,
+            abs_obj_crit=1e-8,
+            alpha_cond=.99,
+            alpha_free=.99,
             verbose=False):
         self.patch = patch
         self.max_iterations = max_iterations
         self.precond = precond
         self.rel_crit = rel_crit
+        self.rel_obj_crit = rel_obj_crit
+        self.abs_obj_crit = abs_obj_crit
         self.adaptive_restart = adaptive_restart
         self.accel = accel
         self.armijo = armijo
@@ -28,10 +34,10 @@ class ProjectedGradient():
         # Find the initial step depending on the mode
         if self.precond:
             # Full step as precond
-            self.alpha_init = 0.99
+            self.alpha = alpha_cond
         else:
             # Optimal step for projected gradient
-            self.alpha_init = 1.0 / self.patch.L
+            self.alpha = alpha_free / self.patch.L
 
     def solve(self, l, x_0=None):
         """
@@ -60,6 +66,8 @@ class ProjectedGradient():
         residual = np.zeros(self.patch.size)
         t_k = 1.
 
+        obj_k = None
+
         if self.verbose:
             self._print_header()
 
@@ -75,7 +83,7 @@ class ProjectedGradient():
             # xk+1_tmp = xk - alpha g
             # xk+1 = PI_K(xk+1_tmp)
             self.patch.apply_AT(residual, _out=x_kp1)
-            x_kp1 *= -self.alpha_init
+            x_kp1 *= -self.alpha
             x_kp1 += y_k
             self.patch.project_hidden_cone_(x_kp1)
 
@@ -83,13 +91,14 @@ class ProjectedGradient():
             dx_norm = np.linalg.norm(dx_kp1)
             x_norm = np.linalg.norm(x_k)
             rel_change = dx_norm / (x_norm + 1e-10)
+            obj_kp1 = 0.5 * np.linalg.norm(residual)**2
+            rel_obj_change = np.abs(obj_kp1 - obj_k) / (obj_k + 1e-10) if obj_k is not None else 1.
 
             if self.verbose:
-                obj = 0.5 * np.linalg.norm(residual)**2
-                self._print_iteration(k, obj, dx_norm, rel_change, t_k)
+                self._print_iteration(k, obj_kp1, dx_norm, rel_change, t_k)
 
             # Check convergence
-            if rel_change < self.rel_crit:
+            if (rel_change < self.rel_crit) or (rel_obj_change  < self.rel_obj_crit) or (obj_kp1 < self.abs_obj_crit):
                 if self.verbose:
                     print(f"\nConverged in {k+1} iterations!")
                 return x_kp1, True
@@ -115,6 +124,7 @@ class ProjectedGradient():
                 # New variables and update y ref
                 x_k, x_kp1 = x_kp1, x_k
                 y_k = x_k
+            obj_k, obj_kp1 = obj_kp1, obj_k
         if self.verbose:
             print(f"\nMaximum iterations ({self.max_iterations}) reached")
         return x_k, False
