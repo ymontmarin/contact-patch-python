@@ -2,10 +2,11 @@ import numpy as np
 import itertools as itt
 import scipy as sc
 
-from contactpatch.coneproject import ProjectedGradient
+from contactpatch.coneproject import ProjectedGradient, ADMM
 
 SOLVERS = {
-    "PGD": ProjectedGradient
+    "PGD": ProjectedGradient,
+    "ADMM": ADMM
 }
 class PolygonContactPatch:
     def __init__(self,

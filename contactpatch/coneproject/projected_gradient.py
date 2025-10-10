@@ -14,22 +14,28 @@ class ProjectedGradient():
             precond=True,
             adaptive_restart=False,
             armijo=False,
+            armijo_iter=20,
+            armijo_sigma=.5,
+            armijo_beta=.5,
             rel_crit=1e-4,
             rel_obj_crit=1e-5,
-            abs_obj_crit=1e-8,
             alpha_cond=.99,
             alpha_free=.99,
-            verbose=False):
+            verbose=False,
+        ):
         self.patch = patch
         self.max_iterations = max_iterations
         self.precond = precond
         self.rel_crit = rel_crit
         self.rel_obj_crit = rel_obj_crit
-        self.abs_obj_crit = abs_obj_crit
         self.adaptive_restart = adaptive_restart
         self.accel = accel
-        self.armijo = armijo
         self.verbose = verbose
+
+        self.armijo = armijo
+        self.armijo_iter = armijo_iter
+        self.armijo_beta = armijo_beta
+        self.armijo_sigma = armijo_sigma
 
         # Find the initial step depending on the mode
         if self.precond:
@@ -39,7 +45,7 @@ class ProjectedGradient():
             # Optimal step for projected gradient
             self.alpha = alpha_free / self.patch.L
 
-    def solve(self, l, x_0=None):
+    def solve(self, l, x_0=None, history=None):
         """
         Solve: min_{x in C} (1/2)||Ax - l||^2
         
@@ -51,80 +57,136 @@ class ProjectedGradient():
             x: Solution
             converged: True if converged, False if max_iter reached
         """
-        # Initialize te variables
+        # Initialize the variables
         x_k = x_0.copy() if x_0 is not None else np.zeros(self.patch.hidden_shape)
+        g_k = np.zeros(self.patch.hidden_shape)
+        dx_k = np.zeros(self.patch.hidden_shape)
+        x_kp1 = np.zeros(self.patch.hidden_shape)
+
+        residual = np.zeros(self.patch.size)
+
+        t_k = 1.
         if self.accel:
             # Momentum point variable
             y_k = x_k.copy()
             if self.adaptive_restart:
-                dx_k = np.zeros(self.patch.hidden_shape)
+                dx_km1 = np.zeros(self.patch.hidden_shape)
         else:
             # Only an alias
             y_k = x_k
-        dx_kp1 = np.zeros(self.patch.hidden_shape)
-        x_kp1 = np.zeros(self.patch.hidden_shape)
-        residual = np.zeros(self.patch.size)
-        t_k = 1.
+        if self.armijo:
+            dx_trial = np.zeros(self.patch.hidden_shape)
+            residual_trial = np.zeros(self.patch.size)
 
-        obj_k = None
+        obj_km1 = None
 
         if self.verbose:
             self._print_header()
 
         for k in range(self.max_iterations):
+            # Residual
             # r = Ayk - b
             self.patch.apply_A(y_k, _out=residual)
             residual -= l
+
+            obj_k = 0.5 * np.dot(residual, residual)
+
+            # Gradient is:
+            # g = A^T r
             if self.precond:
+                # Hessian is A^TA so conditionned gradient is:
+                #   (A^TA)^+ g = A^+ (A^+)^T A^T r
+                #              = A^T (AA^T)^-1 (A^T (AA^T)^-1)^T A^T r
+                #              = A^T (AA^T)^-1 (AA^T)^-1 AA^T r
+                #              = A^T (AA^T)^-1 r
                 # Use AAT_inv as diagonal for conditioning
                 self.patch.apply_AAT_inv_(residual)
+            self.patch.apply_AT(residual, _out=g_k)
 
-            # g = A^TD r
+            # Take the step
             # xk+1_tmp = xk - alpha g
             # xk+1 = PI_K(xk+1_tmp)
-            self.patch.apply_AT(residual, _out=x_kp1)
-            x_kp1 *= -self.alpha
-            x_kp1 += y_k
-            self.patch.project_hidden_cone_(x_kp1)
+            alpha = self.alpha
+            force_restart = False
+            arm_i = 0
+            if self.armijo:
+                success = False
+                for arm_i in range(self.armijo_iter):
+                    # Trial point
+                    x_kp1[...] = - alpha * g_k
+                    x_kp1 += y_k
+                    self.patch.project_hidden_cone_(x_kp1)
+                    
+                    # Direction
+                    np.subtract(x_kp1, y_k, out=dx_trial)
+                    
+                    # New residual and objective
+                    self.patch.apply_A(x_kp1, _out=residual_trial)
+                    residual_trial -= l
+                    obj_trial = 0.5 * np.dot(residual_trial, residual_trial)
+                    
+                    # Armijo condition
+                    if self.accel:
+                        armijo_crit = obj_trial <= obj_k + np.dot(g_k.flatten(), dx_trial.flatten()) + (1/(2*alpha)) * np.dot(dx_trial.flatten(), dx_trial.flatten())
+                    else:
+                        armijo_crit = obj_trial <= obj_k + self.armijo_sigma * np.dot(g_k.flatten(), dx_trial.flatten())
+                    if armijo_crit:
+                        success = True
+                        break
+                    alpha *= self.armijo_beta
 
-            np.subtract(x_kp1, x_k, out=dx_kp1)
-            dx_norm = np.linalg.norm(dx_kp1)
-            x_norm = np.linalg.norm(x_k)
-            rel_change = dx_norm / (x_norm + 1e-10)
-            obj_kp1 = 0.5 * np.linalg.norm(residual)**2
-            rel_obj_change = np.abs(obj_kp1 - obj_k) / (obj_k + 1e-10) if obj_k is not None else 1.
+                if not success:
+                    force_restart = True
+                    if self.verbose:
+                        print(f"  Warning: Armijo line search failed at iteration {k}")
+            else:
+                x_kp1[...] = -alpha * g_k
+                x_kp1 += y_k
+                self.patch.project_hidden_cone_(x_kp1)
 
+            # Compute the stats
+            np.subtract(x_kp1, x_k, out=dx_k)
+            dx_k_norm = np.linalg.norm(dx_k)
+            x_k_norm = np.linalg.norm(x_k)
+
+            rel_change = dx_k_norm / (x_k_norm + 1e-10)
+            rel_obj_change = np.abs(obj_k - obj_km1) / (max(obj_k, obj_km1) + 1e-10) if obj_km1 is not None else 1.
+
+            # Log stat
             if self.verbose:
-                self._print_iteration(k, obj_kp1, dx_norm, rel_change, t_k)
+                self._print_iteration(k, obj_k, dx_k_norm, rel_change, t_k, alpha, arm_i)
+            if history is not None:
+                history.append((k, obj_k, dx_k_norm, rel_change, t_k, alpha, arm_i))
 
             # Check convergence
-            if (rel_change < self.rel_crit) or (rel_obj_change  < self.rel_obj_crit) or (obj_kp1 < self.abs_obj_crit):
+            if (rel_change < self.rel_crit) or (rel_obj_change  < self.rel_obj_crit):
                 if self.verbose:
                     print(f"\nConverged in {k+1} iterations!")
                 return x_kp1, True
 
             # Prepare variable for next iterate
             if self.accel:
-                if k > 0 and self.adaptive_restart and np.dot(dx_kp1, dx_k) < 0:
+                if k > 0 and (force_restart or (self.adaptive_restart and (np.dot(dx_k.flatten(), dx_km1.flatten()) < 0 or obj_k > obj_km1))):
                     # Restart moment
                     t_kp1 = 1.
                     y_k[...] = x_kp1
                 else:
                     # Update momentum point
                     t_kp1 = (1 + np.sqrt(1 + 4*t_k**2)) / 2
-                    y_k[...] = dx_kp1
+                    y_k[...] = dx_k
                     y_k *= (t_k - 1) / t_kp1
                     y_k += x_kp1
                 # New variables
                 x_k, x_kp1 = x_kp1, x_k
                 t_k = t_kp1
                 if self.adaptive_restart:
-                    dx_k, dx_kp1 = dx_kp1, dx_k
+                    dx_k, dx_km1 = dx_km1, dx_k
             else:
                 # New variables and update y ref
                 x_k, x_kp1 = x_kp1, x_k
                 y_k = x_k
-            obj_k, obj_kp1 = obj_kp1, obj_k
+            obj_km1 = obj_k
+
         if self.verbose:
             print(f"\nMaximum iterations ({self.max_iterations}) reached")
         return x_k, False
@@ -137,22 +199,34 @@ class ProjectedGradient():
         else:
             mode.append("PG")
         if self.precond:
-            mode.append("Precond")
+            mode.append(f"Precond(a={self.alpha})")
+        else:
+            mode.append(f"No-Precond(a={self.alpha})")
         if self.adaptive_restart:
             mode.append("Restart")
-        
+        if self.armijo:
+            mode.append(f"Armijo(N={self.armijo_iter}, s={self.armijo_sigma}, b={self.armijo_beta})")
+
         print("=" * 70)
         print(f"Projected Gradient Solver: {' + '.join(mode)}")
-        print(f"Max iterations: {self.max_iterations}, Tolerance: {self.rel_crit:.1e}")
+        print(f"Max iterations: {self.max_iterations}, R-Tolerance: {self.rel_crit:.1e}")
+        print(f"Objective R-Tolerance: {self.rel_obj_crit:.1e}")
+
         print("=" * 70)
-        print(f"{'Iter':>6} {'Objective':>12} {'||dx||':>12} {'Rel Change':>12} {'t_k':>8}")
+        print(f"{'Iter':>6} {'Objective':>12} {'||dx||':>12} {'Rel Change':>12} {'t_k':>8} {'a':>8} {'a_iter':>6}")
         print("-" * 70)
 
-    def _print_iteration(self, k, obj, dx_norm, rel_change, t_k):
+    def _print_iteration(self, k, obj, dx_norm, rel_change, t_k, alpha, arm_i):
         """Print iteration information"""
         # Print every iteration for first 10, then every 10, then every 100
         if k < 10 or k % 10 == 0:
+            line = f"{k:6d} {obj:12.6e} {dx_norm:12.6e} {rel_change:12.6e}"
             if self.accel:
-                print(f"{k:6d} {obj:12.6e} {dx_norm:12.6e} {rel_change:12.6e} {t_k:8.3f}")
+                line += f" {t_k:8.3f}"
             else:
-                print(f"{k:6d} {obj:12.6e} {dx_norm:12.6e} {rel_change:12.6e}    N/A")
+                line += f"    N/A"
+            if self.armijo:
+                line += f" {alpha:8.3f} {arm_i:6d} "
+            else:
+                line += f"    N/A    N/A"
+            print(line)
