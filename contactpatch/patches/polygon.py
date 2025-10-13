@@ -58,10 +58,17 @@ class PolygonContactPatch:
 
         self.solver = SOLVERS[solver_tyep](self, **(solver_kwargs if solver_kwargs is not None else {}))
 
+        self.reset_currents()
         # Optional precompute
         self.ker_precompute = ker_precompute
         if ker_precompute:
             self._compute_pker()
+
+    def reset_currents(self):
+        self.fis_prev = None
+        self.state_prev = None
+        self.l_prev = None
+        self.proj_prev = None
 
     @classmethod
     def generate_polygon_vis(cls, N_sample=10, aimed_n=None, min_n=3, maxit=1000):
@@ -391,7 +398,6 @@ class PolygonContactPatch:
     def apply_ATA_reg_inv(self, fis, rho, _out=None):
         """
         (rI + ATA)^ F = 1/r (F + AT diag(-1/(r + d)) A F)
-
         """
         diag = (-1.) / (self.aat + rho)
         _out = self.apply_AT(diag * self.apply_A(fis), _out=_out)
@@ -711,7 +717,7 @@ class PolygonContactPatch:
         fis[rest, 2] = alpha
         return fis
 
-    def project_cone(self, l, _out=None):
+    def project_cone(self, l, _out=None, history=None):
         """
         Check if F is in K_mu^n
         """
@@ -721,17 +727,26 @@ class PolygonContactPatch:
 
         # Warmstart
         if self.warmstart_strat == 'prev' and self.fis_prev is not None:
-            fis0 = self.fis_prev
+            kwargs = {'x_0': self.fis_prev}
+        elif self.warmstart_strat == 'prev_state' and self.fis_prev is not None:
+            kwargs = self.state_prev
         elif self.warmstart_strat == 'prev_linadjust' and self.fis_prev is not None:
-            fis0 = self.project_hidden_cone(self.fis_prev + self.apply_A_pinv(l - self.l_prev))
+            kwargs = {'x_0': self.project_hidden_cone(self.fis_prev + self.apply_A_pinv(l - self.l_prev))}
+        elif self.warmstart_strat == 'prev_linadjust_state' and self.fis_prev is not None:
+            kwargs = self.state_prev
+            kwargs['x_0'] = self.project_hidden_cone(self.fis_prev + self.apply_A_pinv(l - self.l_prev))
+            kwargs['l_0'] = None
+            kwargs['y_0'] = None
+            kwargs['t_0'] = None
         else:
-            fis0 = self.project_hidden_cone(self.apply_A_pinv(l))
+            kwargs = {'x_0': self.project_hidden_cone(self.apply_A_pinv(l))}
+        kwargs['history'] = history
 
         # Update state for warmstart 1
         self.l_prev = l.copy()
 
         # Optim solve and retrieve projection
-        fis_opti, success = self.solver.solve(l, x_0=fis0)
+        fis_opti, success, state = self.solver.solve(l, **kwargs)
         if not success:
             raise Exception('No solution found')
 
@@ -740,6 +755,7 @@ class PolygonContactPatch:
         # Update state for warmstart 2
         self.fis_prev = fis_opti.copy()
         self.proj_prev = proj.copy()
+        self.state_prev = state
 
         return proj
 

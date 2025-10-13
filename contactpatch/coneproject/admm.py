@@ -12,6 +12,8 @@ class ADMM():
             rel_crit=1e-4,
             abs_crit=1e-6,
             rel_obj_crit=1e-5,
+            min_residual_threshold=1e-8,
+            rho_clip=1e6,
             alpha=1.,
             rho_init=1e-3,
             rho_power=.2,
@@ -27,6 +29,8 @@ class ADMM():
         self.max_iterations = max_iterations
         self.rel_crit = rel_crit
         self.abs_crit = abs_crit
+        self.rho_clip = rho_clip
+        self.min_residual_threshold = min_residual_threshold
         self.verbose = verbose
         self.alpha = alpha
         self.rel_obj_crit = rel_obj_crit
@@ -53,7 +57,7 @@ class ADMM():
         # Rho momentum ?
         # Anderson acceleration ?
  
-    def solve(self, l, x_0=None, history=None):
+    def solve(self, l, x_0=None, l_0=None, rho_0=None, history=None, **kwargs):
         """
         Solve: min_{x in C} (1/2)||Ax - l||^2
         
@@ -70,21 +74,52 @@ class ADMM():
         y_k = np.zeros(self.patch.hidden_shape)
         x_k = np.zeros(self.patch.hidden_shape)
         l_k = np.zeros(self.patch.hidden_shape)
+ 
+        rho = self.rho_init if rho_0 is None else rho_0
+        # Initialize l_0
+        if l_0 is not None:
+            l_k[...] = l_0
+        elif x_0 is not None:
+            # Initialize with gradient: λ_0 = A^T(Ax_0 - l)
+            residual_0 = np.zeros(self.patch.size)
+            self.patch.apply_A(x_0, _out=residual_0)
+            residual_0 -= l
+            l_k = np.zeros(self.patch.hidden_shape)
+            self.patch.apply_AT(residual_0, _out=l_k)
+
+            grad_norm = np.linalg.norm(l_k)            
+            # Scale rho based on gradient
+            if grad_norm > 1e-8:
+                rho *= min(grad_norm, 1.)
+            l_k *= rho  # Scale by rho
+  
         if self.dual_momentum > 0.:
-            l_kp1 = np.zeros(self.patch.hidden_shape)
+            l_kp1[...] = l_k
         else:
             l_kp1 = l_k
-        diff = np.zeros(self.patch.hidden_shape)
 
+        diff = np.zeros(self.patch.hidden_shape)
         obj_residual = np.zeros(self.patch.size)
 
-        rho = self.rho_init
+        # Check if x_0 is feasible to fix alpha
+        if x_0 is not None:
+            x_0_projected = x_0.copy()
+            x_0_projected = self.patch.project_hidden_cone(x_0)
+            feasibility_error = np.linalg.norm(x_0 - x_0_projected)            
+            if feasibility_error < 1e-8:
+                # x_0 is feasible, use conservative alpha
+                alpha = 1.0 if self.alpha > 1. else self.alpha
+                if self.verbose:
+                    print("Initial point is feasible, using alpha=1.0")
+            else:
+                alpha = self.alpha
+        else:
+            alpha = self.alpha
 
         obj_km1 = None
 
         if self.verbose:
             self._print_header()
-
         for k in range(self.max_iterations):
             # 1. X-update: Solve linear system (ATA + rhoI) x_k = A^Tl + rho y_km1 - l_km1
             self.patch.apply_AT(l, _out=x_k)
@@ -94,8 +129,8 @@ class ADMM():
 
             # 2. Y-update:
             # y_k = Proj(x_k + l_km1 / rho)
-            y_k[...] = self.alpha * x_k
-            y_k += (1 - self.alpha) * y_km1
+            y_k[...] = alpha * x_k
+            y_k += (1 - alpha) * y_km1
             y_k += l_k / rho
             self.patch.project_hidden_cone_(y_k)
             
@@ -132,15 +167,15 @@ class ADMM():
                 history.append((k, obj_k, primal_residual, dual_residual, rel_primal_residual, rel_dual_residual, rho))
 
             if (primal_residual < self.abs_crit and dual_residual < self.abs_crit) or (rel_primal_residual < self.rel_crit and rel_dual_residual < self.rel_crit) or (rel_obj_change < self.rel_obj_crit):
-                return y_k, True
+                return y_k, True, {'x_0': y_k, 'l_0': l_kp1, 'rho_0': rho}
 
             # 5. rho update
             if self.rho_update_rule in {"spectral", "linear"}:
-                if primal_residual > self.rho_update_ratio * dual_residual:
+                if primal_residual > self.rho_update_ratio * dual_residual and primal_residual > self.min_residual_threshold:
                     rho *= self.rho_factor
-                elif dual_residual > self.rho_update_ratio * primal_residual:
+                elif dual_residual > self.rho_update_ratio * primal_residual and dual_residual > self.min_residual_threshold:
                     rho /= self.rho_factor
-                rho = np.clip(rho, 1e-8, 1e8)
+                rho = np.clip(rho, 1 / self.rho_clip, self.rho_clip)
 
             # Prepare next iteration
             obj_km1 = obj_k
@@ -149,7 +184,7 @@ class ADMM():
 
         if self.verbose:
             print(f"\nMaximum iterations ({self.max_iterations}) reached")
-        return y_k, False
+        return y_k, False, {'x_0': y_km1, 'l_0': l_k, 'rho_0': rho}
 
     def _print_header(self):
         """Print header for verbose output"""        

@@ -12,22 +12,25 @@ class ProjectedGradient():
             max_iterations=1000,
             accel=True,
             precond=True,
-            adaptive_restart=False,
-            armijo=False,
+            adaptive_restart=True,
+            armijo=True,
             armijo_iter=20,
-            armijo_sigma=.5,
+            armijo_sigma=.1,
             armijo_beta=.5,
-            rel_crit=1e-4,
-            rel_obj_crit=1e-5,
+            armijo_force_restart=.8,
+            rel_crit=1e-6,
+            abs_crit=1e-8,
+            rel_obj_crit=1e-6,
+            abs_obj_crit=1e-9,
+            optim_crit=1e-9,
             alpha_cond=.99,
             alpha_free=.99,
             verbose=False,
         ):
         self.patch = patch
+
         self.max_iterations = max_iterations
         self.precond = precond
-        self.rel_crit = rel_crit
-        self.rel_obj_crit = rel_obj_crit
         self.adaptive_restart = adaptive_restart
         self.accel = accel
         self.verbose = verbose
@@ -36,6 +39,13 @@ class ProjectedGradient():
         self.armijo_iter = armijo_iter
         self.armijo_beta = armijo_beta
         self.armijo_sigma = armijo_sigma
+        self.armijo_force_restart = armijo_force_restart
+
+        self.abs_crit = abs_crit
+        self.abs_obj_crit = abs_obj_crit
+        self.rel_crit = rel_crit
+        self.optim_crit = optim_crit
+        self.rel_obj_crit = rel_obj_crit
 
         # Find the initial step depending on the mode
         if self.precond:
@@ -45,7 +55,7 @@ class ProjectedGradient():
             # Optimal step for projected gradient
             self.alpha = alpha_free / self.patch.L
 
-    def solve(self, l, x_0=None, history=None):
+    def solve(self, l, x_0=None, y_0=None, t_0=None, history=None, **kwargs):
         """
         Solve: min_{x in C} (1/2)||Ax - l||^2
         
@@ -65,10 +75,10 @@ class ProjectedGradient():
 
         residual = np.zeros(self.patch.size)
 
-        t_k = 1.
+        t_k = 1. if t_0 is None else t_0
         if self.accel:
             # Momentum point variable
-            y_k = x_k.copy()
+            y_k = x_k.copy() if y_0 is None else y_0.copy()
             if self.adaptive_restart:
                 dx_km1 = np.zeros(self.patch.hidden_shape)
         else:
@@ -113,7 +123,7 @@ class ProjectedGradient():
                 success = False
                 for arm_i in range(self.armijo_iter):
                     # Trial point
-                    x_kp1[...] = - alpha * g_k
+                    x_kp1[...] = -alpha * g_k
                     x_kp1 += y_k
                     self.patch.project_hidden_cone_(x_kp1)
                     
@@ -139,6 +149,8 @@ class ProjectedGradient():
                     force_restart = True
                     if self.verbose:
                         print(f"  Warning: Armijo line search failed at iteration {k}")
+                elif arm_i > self.armijo_force_restart * self.armijo_iter:
+                    force_restart = True
             else:
                 x_kp1[...] = -alpha * g_k
                 x_kp1 += y_k
@@ -146,23 +158,31 @@ class ProjectedGradient():
 
             # Compute the stats
             np.subtract(x_kp1, x_k, out=dx_k)
-            dx_k_norm = np.linalg.norm(dx_k)
+            dx_k_norm = np.linalg.norm(dx_k)  # It correspond to \|P(x_k + a grad) - x_k\| 
             x_k_norm = np.linalg.norm(x_k)
 
-            rel_change = dx_k_norm / (x_k_norm + 1e-10)
+            abs_change = dx_k_norm
+            rel_change =  abs_change / (x_k_norm + 1e-10)
             rel_obj_change = np.abs(obj_k - obj_km1) / (max(obj_k, obj_km1) + 1e-10) if obj_km1 is not None else 1.
+            optim_crit_value = dx_k_norm
+
+            # Check convergence
+            change = (abs_change < self.abs_crit or rel_change < self.rel_crit) and rel_obj_change < self.rel_obj_crit
+            obj_val = obj_k < self.abs_obj_crit
+            optim_test = optim_crit_value < self.optim_crit
 
             # Log stat
             if self.verbose:
-                self._print_iteration(k, obj_k, dx_k_norm, rel_change, t_k, alpha, arm_i)
+                self._print_iteration(k, obj_k, dx_k_norm, rel_change, optim_crit_value, t_k, alpha, arm_i)
             if history is not None:
-                history.append((k, obj_k, dx_k_norm, rel_change, t_k, alpha, arm_i))
+                history.append((k, obj_k, dx_k_norm, rel_change, optim_crit_value, t_k, alpha, arm_i))
 
-            # Check convergence
-            if (rel_change < self.rel_crit) or (rel_obj_change  < self.rel_obj_crit):
+            final_crit = change or obj_val or optim_test
+            # final_crit = obj_val or optim_test
+            if final_crit:
                 if self.verbose:
-                    print(f"\nConverged in {k+1} iterations!")
-                return x_kp1, True
+                    print(f"\nConverged in {k+1} iterations! Change:{change} | Obj val:{obj_val} | Optim crit:{optim_test}")
+                return x_kp1, True, {'x_0': x_kp1, 'y_0': y_k, 't_0': t_k}
 
             # Prepare variable for next iterate
             if self.accel:
@@ -189,7 +209,7 @@ class ProjectedGradient():
 
         if self.verbose:
             print(f"\nMaximum iterations ({self.max_iterations}) reached")
-        return x_k, False
+        return x_k, False, {'x_0': x_k, 'y_0': y_k, 't_0': t_k}
 
     def _print_header(self):
         """Print header for verbose output"""
@@ -213,14 +233,14 @@ class ProjectedGradient():
         print(f"Objective R-Tolerance: {self.rel_obj_crit:.1e}")
 
         print("=" * 70)
-        print(f"{'Iter':>6} {'Objective':>12} {'||dx||':>12} {'Rel Change':>12} {'t_k':>8} {'a':>8} {'a_iter':>6}")
+        print(f"{'Iter':>6} {'Objective':>12} {'||dx||':>12} {'Rel Change':>12} {'Optim Crit':>12} {'t_k':>8} {'a':>8} {'a_iter':>6}")
         print("-" * 70)
 
-    def _print_iteration(self, k, obj, dx_norm, rel_change, t_k, alpha, arm_i):
+    def _print_iteration(self, k, obj, dx_norm, rel_change, optim_crit_value, t_k, alpha, arm_i):
         """Print iteration information"""
         # Print every iteration for first 10, then every 10, then every 100
         if k < 10 or k % 10 == 0:
-            line = f"{k:6d} {obj:12.6e} {dx_norm:12.6e} {rel_change:12.6e}"
+            line = f"{k:6d} {obj:12.6e} {dx_norm:12.6e} {rel_change:12.6e} {optim_crit_value:12.6e}"
             if self.accel:
                 line += f" {t_k:8.3f}"
             else:
