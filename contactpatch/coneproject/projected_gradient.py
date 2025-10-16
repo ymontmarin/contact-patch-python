@@ -21,9 +21,9 @@ class ProjectedGradient():
             rel_crit=1e-6,
             abs_crit=1e-8,
             rel_obj_crit=1e-6,
-            abs_obj_crit=1e-9,
-            optim_crit=1e-9,
-            alpha_cond=.99,
+            abs_obj_crit=1e-12,
+            optim_crit=1e-12,
+            alpha_cond=1.,
             alpha_free=.99,
             verbose=False,
         ):
@@ -70,10 +70,11 @@ class ProjectedGradient():
         # Initialize the variables
         x_k = x_0.copy() if x_0 is not None else np.zeros(self.patch.hidden_shape)
         g_k = np.zeros(self.patch.hidden_shape)
+        d_k = np.zeros(self.patch.hidden_shape)
         dx_k = np.zeros(self.patch.hidden_shape)
         x_kp1 = np.zeros(self.patch.hidden_shape)
 
-        residual = np.zeros(self.patch.size)
+        residual = np.zeros(self.patch.n)
 
         t_k = 1. if t_0 is None else t_0
         if self.accel:
@@ -86,7 +87,7 @@ class ProjectedGradient():
             y_k = x_k
         if self.armijo:
             dx_trial = np.zeros(self.patch.hidden_shape)
-            residual_trial = np.zeros(self.patch.size)
+            residual_trial = np.zeros(self.patch.n)
 
         obj_km1 = None
 
@@ -100,6 +101,7 @@ class ProjectedGradient():
             residual -= l
 
             obj_k = 0.5 * np.dot(residual, residual)
+            self.patch.apply_AT(residual, _out=g_k)
 
             # Gradient is:
             # g = A^T r
@@ -111,7 +113,7 @@ class ProjectedGradient():
                 #              = A^T (AA^T)^-1 r
                 # Use AAT_inv as diagonal for conditioning
                 self.patch.apply_AAT_inv_(residual)
-            self.patch.apply_AT(residual, _out=g_k)
+            self.patch.apply_AT(residual, _out=d_k)
 
             # Take the step
             # xk+1_tmp = xk - alpha g
@@ -123,7 +125,7 @@ class ProjectedGradient():
                 success = False
                 for arm_i in range(self.armijo_iter):
                     # Trial point
-                    x_kp1[...] = -alpha * g_k
+                    x_kp1[...] = -alpha * d_k
                     x_kp1 += y_k
                     self.patch.project_hidden_cone_(x_kp1)
                     
@@ -152,7 +154,7 @@ class ProjectedGradient():
                 elif arm_i > self.armijo_force_restart * self.armijo_iter:
                     force_restart = True
             else:
-                x_kp1[...] = -alpha * g_k
+                x_kp1[...] = -alpha * d_k
                 x_kp1 += y_k
                 self.patch.project_hidden_cone_(x_kp1)
 
@@ -164,7 +166,14 @@ class ProjectedGradient():
             abs_change = dx_k_norm
             rel_change =  abs_change / (x_k_norm + 1e-10)
             rel_obj_change = np.abs(obj_k - obj_km1) / (max(obj_k, obj_km1) + 1e-10) if obj_km1 is not None else 1.
-            optim_crit_value = dx_k_norm
+
+            # TODO: Optimize
+            optim_crit_value = .5 * np.linalg.norm(
+                self.patch.apply_A(
+                    self.patch.project_hidden_cone(x_kp1 - self.patch.apply_A_pinv(self.patch.apply_A(x_kp1) - l))
+                    - x_kp1
+                )
+            )**2
 
             # Check convergence
             change = (abs_change < self.abs_crit or rel_change < self.rel_crit) and rel_obj_change < self.rel_obj_crit
@@ -178,7 +187,7 @@ class ProjectedGradient():
                 history.append((k, obj_k, dx_k_norm, rel_change, optim_crit_value, t_k, alpha, arm_i))
 
             final_crit = change or obj_val or optim_test
-            # final_crit = obj_val or optim_test
+
             if final_crit:
                 if self.verbose:
                     print(f"\nConverged in {k+1} iterations! Change:{change} | Obj val:{obj_val} | Optim crit:{optim_test}")

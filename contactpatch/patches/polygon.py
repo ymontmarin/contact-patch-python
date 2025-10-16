@@ -24,35 +24,43 @@ class PolygonContactPatch:
         vis = [[x1,y1],
                  ...
                [xn,yn]]
-        The flatten version is V = [x1,y1,...,xn,yn] (2n)
+        The flatten version is V = [x1,y1,...,xn,yn] (2N)
 
         mu: the friction coeficient s.t. |fi_T| leq mu fi_N or eq. fi in K_mu
 
-        K = {(sum_i=1..n (vi,0)xfi, sum_i=1..n fi) | fi in K_mu )}
-          = {AF | F in K_mu^n )}
+        K = {(sum_i=1..N (vi,0)xfi, sum_i=1..N fi) | fi in K_mu )}
+          = {AF | F in K_mu^N )}
 
-        Where F = [fx1,fy1,fz1,...,fx1,fy1,fz1] (3n)
+        Where F = [fx1,fy1,fz1,...,fx1,fy1,fz1] (3N)
         The unflatten version is fis = [[fx1,fy1,fz1],
                                              ...
                                         [fxn,fyn,fzn]]
 
-        A = [[ B1  ...  Bn ]
-             [ I3  ...  I3 ]] (6x3n)
+        A = [[ B1  ...  bN ]
+             [ I3  ...  I3 ]] (6x3N)
         Bi = [[     02       vi^perp ]
               [ -vi^perp^T     01    ]] (3x3)
     
         Because the vi are centered: Sum_i Bi = 03
 
         We note wi = vi^perp and mwi = -wi^perp
+
+        A is of size 6x3N and rank 6
+            Ker(A^T) = 0
+            Im(A) = R^6
+
+        pinv(A) = A^T(AA^T)^-1
+        pinv(A)A is the projector on Im(A^T) = Im(pinv(A)) = Ker(A)^perp
         """
         self.vis = self.process_polygon(vis)[0]
 
         self.warmstart_strat = warmstart_strat
         self.mu = mu
-        self.n = len(vis)
-        self.hidden_shape = (self.n, 3)
-        self.size = 6
-        assert self.n > 2
+        self.N = len(vis)
+        self.hidden_shape = (self.N, 3)
+        self.n = 6
+        self.m = 3 * self.N
+        assert self.N > 2
 
         self._force_cone_precompute()
 
@@ -165,7 +173,7 @@ class PolygonContactPatch:
         # mxy = Sum xiyi is 0 ! Because of hypothesis
 
         # It is AAT and also the non null spectrum of ATA
-        self.aat = np.array([self.mx, self.my, self.mx + self.my, self.n, self.n, self.n])
+        self.aat = np.array([self.mx, self.my, self.mx + self.my, self.N, self.N, self.N])
         self.aat_inv = 1 / self.aat
         self.aat_inv_sq = self.aat_inv**2
 
@@ -178,8 +186,8 @@ class PolygonContactPatch:
     """
     def get_A(self):
         # Block construction
-        res = np.zeros((6, 3 * self.n))
-        for i in range(self.n):
+        res = np.zeros((6, 3 * self.N))
+        for i in range(self.N):
             res[:2, 3*i+2] = self.wis[i]
             res[2, 3*i:3*i+2] = self.mwis[i]
             res[3:, 3*i:3*i+3] = np.eye(3)
@@ -190,8 +198,8 @@ class PolygonContactPatch:
 
     def get_AAT(self):
         """
-        A = [[ B1  ...  Bn ]
-             [ I3  ...  I3 ]] (6x3n)
+        A = [[ B1  ...  bN ]
+             [ I3  ...  I3 ]] (6x3N)
         Bi = [[     02       vi^perp ]
               [ -vi^perp^T     01    ]] (3x3)
 
@@ -225,33 +233,33 @@ class PolygonContactPatch:
 
     def get_A_pinv(self):
         """
-        A is 6,3n of rank 6
+        A is 6,3N of rank 6
         so pinv(A) = A^T(AA^T)^-1
         """
         return self.get_AT() * self.aat_inv[np.newaxis, :]
 
     def get_ATA(self):
         """
-        A = [[ B1  ...  Bn ]
-             [ I3       I3 ]] (6x3n)
+        A = [[ B1  ...  bN ]
+             [ I3       I3 ]] (6x3N)
         Bi = [[  02  wi ]
               [ -wiT  01 ]] (3x3)
 
-        ATA = [[(B1TB1 + I3)  ...  (B1TBn + I3)]
+        ATA = [[(B1TB1 + I3)  ...  (B1TbN + I3)]
                         ...
-               [(BnTB1 + I3)  ...  (BnTBn + I3)]]
+               [(bNTB1 + I3)  ...  (bNTbN + I3)]]
         BiTBj = [[ wiwjT 0     ]
                  [   0   wiTwj ]]
         """
-        res = np.zeros((3 * self.n, 3 * self.n))
+        res = np.zeros((3 * self.N, 3 * self.N))
 
         # Add upper left part
-        res.reshape(self.n, 3, self.n, 3)[:,:2,:,:2] = (
+        res.reshape(self.N, 3, self.N, 3)[:,:2,:,:2] = (
             np.einsum('ia,jb->iajb', self.wis, self.wis)
             + np.eye(2)[np.newaxis, :, np.newaxis, :]
         )
         # Add scalar part
-        res.reshape(self.n, 3, self.n, 3)[:,2,:,2] = np.einsum('ia,ja->ij', self.wis, self.wis) + 1.
+        res.reshape(self.N, 3, self.N, 3)[:,2,:,2] = np.einsum('ia,ja->ij', self.wis, self.wis) + 1.
         return res
 
     def get_ATA_pinv(self):
@@ -261,33 +269,33 @@ class PolygonContactPatch:
                   = A^T diag(aat_inv**2) A
 
         Recall:
-        A = [[ B1  ...  Bn ]
-             [ I3       I3 ]] (6x3n)
+        A = [[ B1  ...  bN ]
+             [ I3       I3 ]] (6x3N)
         Bi = [[  02  wi ]
               [ -wiT  01 ]] (3x3)
 
         If we block write a 6 element diagonal D=diag(e1,e2,e3,f1,f2,f3)
         as D = [[E,0],[0,F]], with E = diag(e1,e2,e3), F = diag(f1,f2,f3)
         we have:
-        A^TDA = [[(B1TEB1 + F)  ...  (B1TDBn + F)]
+        A^TDA = [[(B1TEB1 + F)  ...  (B1TDbN + F)]
                          ...
-                 [(BnTEB1 + F)  ...  (BnTDBn + F)]]
+                 [(bNTEB1 + F)  ...  (bNTDbN + F)]]
 
         BiTEBj = [[ e3 wi wjT       0     ]
                   [   0          wiT E' wj ]]
         where E' = diag(e1,e2)
         """
-        res = np.zeros((3 * self.n, 3 * self.n))
+        res = np.zeros((3 * self.N, 3 * self.N))
 
         diag = self.aat_inv_sq
 
         # Add upper left part
-        res.reshape(self.n, 3, self.n, 3)[:,:2,:,:2] = (
+        res.reshape(self.N, 3, self.N, 3)[:,:2,:,:2] = (
             np.einsum('ia,jb->iajb', self.wis, diag[2] * self.wis)
             + np.diag(diag[3:5])[np.newaxis, :, np.newaxis, :]
         )
         # Add scalar part
-        res.reshape(self.n, 3, self.n, 3)[:,2,:,2] = np.einsum('ia,ja->ij', self.wis,  diag[np.newaxis, :2] * self.wis) + diag[5]
+        res.reshape(self.N, 3, self.N, 3)[:,2,:,2] = np.einsum('ia,ja->ij', self.wis,  diag[np.newaxis, :2] * self.wis) + diag[5]
         return res
 
     def get_ATA_reg_inv(self, rho):
@@ -307,20 +315,20 @@ class PolygonContactPatch:
 
         We can reuse the calculus trick of pinv(ATA) with the new diagonal
         """
-        res = np.zeros((3 * self.n, 3 * self.n))
+        res = np.zeros((3 * self.N, 3 * self.N))
 
         rho_inv = 1. / rho
         diag = -rho_inv / (self.aat + rho)
 
         # Add upper left part
-        res.reshape(self.n, 3, self.n, 3)[:,:2,:,:2] = (
+        res.reshape(self.N, 3, self.N, 3)[:,:2,:,:2] = (
             np.einsum('ia,jb->iajb', self.wis, diag[2] * self.wis)
             + np.diag(diag[3:5])[np.newaxis, :, np.newaxis, :]
         )
         # Add scalar part
-        res.reshape(self.n, 3, self.n, 3)[:,2,:,2] = np.einsum('ia,ja->ij', self.wis,  diag[np.newaxis, :2] * self.wis) + diag[5]
+        res.reshape(self.N, 3, self.N, 3)[:,2,:,2] = np.einsum('ia,ja->ij', self.wis,  diag[np.newaxis, :2] * self.wis) + diag[5]
         # Add identity term
-        res += rho_inv * np.eye(3 * self.n)
+        res += rho_inv * np.eye(3 * self.N)
         return res
 
     """
@@ -353,7 +361,7 @@ class PolygonContactPatch:
         return fis: (nx3)
         """
         if _out is None:
-            _out = np.zeros((self.n, 3))
+            _out = np.zeros((self.N, 3))
 
         _out[:, :2] = l[2] * self.mwis
         _out[:, 2] = self.wis[:, 0] * l[0] + self.wis[:, 1] * l[1]
@@ -423,17 +431,17 @@ class PolygonContactPatch:
         2. Internal z-modes
             
         Construct:
-            V: (3n)x(3n-6) basis matrix for Ker(A)
-            -> A V = 0 of size 6 x (3n-6)
+            V: (3N)x(3N-6) basis matrix for Ker(A)
+            -> A V = 0 of size 6 x (3N-6)
         """
-        # Type 1: XY-MODES (2n-3 vectors typically)
-        xy_modes = self._construct_xy_modes().T  # 3n x 2n-3
+        # Type 1: XY-MODES (2N-3 vectors typically)
+        xy_modes = self._construct_xy_modes().T  # 3N x 2N-3
 
         # Type 2: Z-MODES (n-3 vectors typically) 
-        z_modes = self._construct_z_modes().T  # 3n x n-3
+        z_modes = self._construct_z_modes().T  # 3N x N-3
 
         # Stack all vectors
-        V_matrix = np.concatenate((xy_modes, z_modes), axis=1)  # 3n x 3n-6
+        V_matrix = np.concatenate((xy_modes, z_modes), axis=1)  # 3N x 3N-6
 
         if orthogonalize:
             # Orthogonalize using QR decomposition
@@ -441,7 +449,7 @@ class PolygonContactPatch:
             
             # Keep only linearly independent columns
             rank = np.sum(np.abs(np.diag(R)) > 1e-12)
-            assert rank == (3 * self.n - 6)
+            assert rank == (3 * self.N - 6)
             V_matrix = Q[:, :rank]
 
         return V_matrix
@@ -450,38 +458,38 @@ class PolygonContactPatch:
         """
         Construct internal xy-deformation modes
         
-        Null vector of form (a1,b1,0,...,an,bn,0)
+        Null vector of form (a1,b1,0,...,aN,bN,0)
 
         These represent motions in the xy-plane that preserve:
         1. Centroid: Σaᵢ = 0, Σbᵢ = 0
         2. Shape constraint: Σ(xᵢaᵢ + yᵢbᵢ) = 0
         
-        Method: Find null space of the 3×2n constraint matrix
+        Method: Find null space of the 3×2N constraint matrix
         """
         # Build constraint matrix for (a₁,b₁,a₂,b₂,...,aₙ,bₙ)
-        C_xy = np.zeros((3, 2*self.n))
+        C_xy = np.zeros((3, 2*self.N))
 
         # Row 0: Σaᵢ = 0 (sum of x-displacements = 0)
         C_xy[0, 0::2] = 1  # Coefficients of a₁, a₂, ..., aₙ
         # Row 1: Σbᵢ = 0 (sum of y-displacements = 0)  
         C_xy[1, 1::2] = 1  # Coefficients of b₁, b₂, ..., bₙ    
         # Row 2: Σ(xᵢaᵢ + yᵢbᵢ) = 0 (orthogonal to polygon shape)
-        C_xy[2, :] = self.wis.reshape(2*self.n)
+        C_xy[2, :] = self.wis.reshape(2*self.N)
 
-        # Find null space of C_xy of size 3x2n
+        # Find null space of C_xy of size 3x2N
         _, s, Vt = sc.linalg.svd(C_xy, full_matrices=True, compute_uv=True)
         # The rank should be 3
         assert len(s) == 3
         assert np.all(~np.isclose(s, 0.))
         
-        # Extract null space vectors (should be 2n-3 of them)
-        xy_null = Vt[3:, :]  # (2n-3) × 2n
+        # Extract null space vectors (should be 2N-3 of them)
+        xy_null = Vt[3:, :]  # (2N-3) × 2N
         
-        # Convert to full 3n-dimensional vectors
+        # Convert to full 3N-dimensional vectors
         xy_modes  = np.concatenate(
-            (xy_null.reshape(2*self.n-3, self.n, 2), np.zeros((2*self.n-3, self.n, 1))),
+            (xy_null.reshape(2*self.N-3, self.N, 2), np.zeros((2*self.N-3, self.N, 1))),
             axis=2
-        ).reshape(2*self.n-3, 3*self.n)
+        ).reshape(2*self.N-3, 3*self.N)
 
         return xy_modes
 
@@ -496,13 +504,13 @@ class PolygonContactPatch:
         
         Method: Find null space of the 3×n constraint matrix
         """
-        if self.n == 3:
-            return np.zeros((0, 3*self.n))  # Need at least 4 vertices for non-trivial z-deformations
+        if self.N == 3:
+            return np.zeros((0, 3*self.N))  # Need at least 4 vertices for non-trivial z-deformations
 
         # Build constraint matrix for (c₁, c₂, ..., cₙ)
-        C_z = np.concatenate((self.wis, np.ones((self.n, 1))), axis=1).T  # 3 x n
+        C_z = np.concatenate((self.wis, np.ones((self.N, 1))), axis=1).T  # 3 x n
         
-        # Find null space of 3n
+        # Find null space of 3N
         _, s, Vt = sc.linalg.svd(C_z, full_matrices=True, compute_uv=True)
         # The rank should be 3
         assert len(s) == 3
@@ -511,18 +519,18 @@ class PolygonContactPatch:
         # Extract null space vectors (should be n-3 of them)
         z_null = Vt[3:, :]  # (n-3) × n
         
-        # Convert to full 3n-dimensional vectors
+        # Convert to full 3N-dimensional vectors
         z_modes  = np.concatenate(
-            (np.zeros((self.n-3, self.n, 2)), z_null.reshape(self.n-3, self.n, 1)),
+            (np.zeros((self.N-3, self.N, 2)), z_null.reshape(self.N-3, self.N, 1)),
             axis=2
-        ).reshape(self.n-3, 3*self.n)
+        ).reshape(self.N-3, 3*self.N)
         
         return z_modes
 
     def _compute_pker(self):
-        kerA = self._compute_kerA()  # 3n x 3n-6
+        kerA = self._compute_kerA()  # 3N x 3N-6
         self.pkers = {}
-        for i in range(self.n):
+        for i in range(self.N):
             U, s, _ = sc.linalg.svd(kerA[3*i:3*i+3], full_matrices=False, compute_uv=True)
             assert len(s) == 3
             rank = sum(~np.isclose(s, 0.))
@@ -640,7 +648,7 @@ class PolygonContactPatch:
     Cone elements generation
     """
     def generate_point_in_hidden_cone(self, fn_max=1):
-        gene = np.random.uniform(0., 1., (self.n, 3))
+        gene = np.random.uniform(0., 1., (self.N, 3))
 
         h = fn_max * (gene[:,0] ** (1/3))
         r = self.mu * h * np.sqrt(gene[:,1])
@@ -649,7 +657,7 @@ class PolygonContactPatch:
         return np.stack([r * np.cos(t), r * np.sin(t), h], axis=1)
 
     def generate_point_in_hidden_cone_space(self):
-        return np.random.randn(self.n, 3)
+        return np.random.randn(self.N, 3)
 
     def generate_point_in_cone(self):
         return self.apply_A(self.generate_point_in_hidden_cone())
