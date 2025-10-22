@@ -4,8 +4,9 @@ import time
 from itertools import product
 import matplotlib.pyplot as plt
 import seaborn as sns
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Dict, List, Tuple, Any
+import warnings
 
 from contactpatch.patches import PolygonContactPatch
 
@@ -13,17 +14,41 @@ from contactpatch.patches import PolygonContactPatch
 class BenchmarkResult:
     """Store results from a single benchmark run"""
     solver_type: str
+    config_name: str
     n_sample: int
     polygon_id: int
     test_point_id: int
-    hyperparams: Dict[str, Any]
     iterations: int
     time_seconds: float
     converged: bool
     final_objective: float
+    hp_dict: Dict[str, Any] = None
     
+    def to_dict(self):
+        """Convert to flat dictionary"""
+        d = asdict(self)
+        hp = d.pop('hp_dict', {})
+        for key, value in hp.items():
+            d[f'hp_{key}'] = value
+        return d
+
 class OptimizationBenchmark:
-    """Benchmark suite for PGD and ADMM solvers"""
+    """Enhanced benchmark suite with comprehensive failure analysis"""
+    
+    # Fixed convergence criteria for fair comparison
+    STANDARD_PGD_CONVERGENCE = {
+        'rel_crit': 1e-5,
+        'abs_crit': 1e-7,
+        'rel_obj_crit': 1e-6,
+        'abs_obj_crit': 1e-12,
+        'optim_crit': 1e-12,
+    }
+    
+    STANDARD_ADMM_CONVERGENCE = {
+        'rel_crit': 1e-4,
+        'abs_crit': 1e-5,
+        'abs_obj_crit': 1e-12,
+    }
     
     def __init__(self, mu: float = 2.0, n_test_points: int = 20):
         self.mu = mu
@@ -34,20 +59,19 @@ class OptimizationBenchmark:
         """Generate test polygons and points"""
         self.test_problems = []
         
+        print("Generating test problems...")
         for n_sample in n_samples_list:
             for poly_id in range(n_polygons_per_size):
-                # Generate polygon
                 vis = PolygonContactPatch.generate_polygon_vis(
-                    N_sample=3*n_sample, 
+                    N_sample=50*n_sample, 
                     aimed_n=n_sample
                 )
                 
-                # Generate test points
                 test_points = []
                 for point_id in range(self.n_test_points):
-                    # Generate random point in R^6
                     fl = np.random.randn(6)
-                    fl = fl / np.linalg.norm(fl) * np.random.uniform(0.5, 5.0)
+                    scale = np.random.uniform(0.1, 10.0)
+                    fl = fl / (np.linalg.norm(fl) + 1e-10) * scale
                     test_points.append(fl)
                 
                 self.test_problems.append({
@@ -57,93 +81,111 @@ class OptimizationBenchmark:
                     'test_points': test_points
                 })
         
-        print(f"Generated {len(self.test_problems)} test problems")
+        print(f"✓ Generated {len(self.test_problems)} test problems")
+        print(f"  Total test cases: {len(self.test_problems) * self.n_test_points}")
         return self
     
-    def get_pgd_hyperparameter_grid(self, level: str = 'default'):
-        """Define PGD hyperparameter search grid"""
-        if level == 'minimal':
-            return [{
+    def get_pgd_configs(self, mode: str = 'default'):
+        """Get PGD configurations - HYPERPARAMETERS ONLY"""
+        configs = {}
+        
+        if mode == 'baseline':
+            configs['PGD_baseline'] = {
+                'accel': False,
+                'precond': True,
+                'adaptive_restart': False,
+                'armijo': False,
+                'alpha_cond': 0.99,
+            }
+            configs['PGD_fista'] = {
+                'accel': True,
+                'precond': True,
+                'adaptive_restart': False,
+                'armijo': False,
+                'alpha_cond': 0.99,
+            }
+            configs['PGD_fista_restart'] = {
                 'accel': True,
                 'precond': True,
                 'adaptive_restart': True,
                 'armijo': False,
-                'rel_crit': 1e-5,
-                'abs_crit': 1e-7,
                 'alpha_cond': 0.99,
-            }]
+            }
+            configs['PGD_fista_restart_armijo'] = {
+                'accel': True,
+                'precond': True,
+                'adaptive_restart': True,
+                'armijo': True,
+                'armijo_iter': 20,
+                'armijo_sigma': 0.1,
+                'armijo_beta': 0.5,
+                'alpha_cond': 1.0,
+            }
         
-        elif level == 'default':
-            return [
-                # Baseline: FISTA + Precond
-                {
-                    'accel': True,
-                    'precond': True,
-                    'adaptive_restart': False,
-                    'armijo': False,
-                    'rel_crit': 1e-5,
-                    'abs_crit': 1e-7,
-                    'alpha_cond': 0.99,
-                },
-                # + Adaptive Restart
-                {
+        elif mode == 'alpha_sweep':
+            for alpha in [0.5, 0.7, 0.85, 0.95, 0.99, 1.0]:
+                configs[f'PGD_alpha_{alpha}'] = {
                     'accel': True,
                     'precond': True,
                     'adaptive_restart': True,
                     'armijo': False,
-                    'rel_crit': 1e-5,
-                    'abs_crit': 1e-7,
-                    'alpha_cond': 0.99,
-                },
-                # + Armijo
-                {
+                    'alpha_cond': alpha,
+                }
+        
+        elif mode == 'armijo_sigma_sweep':
+            for sigma in [0.01, 0.05, 0.1, 0.2, 0.3, 0.5]:
+                configs[f'PGD_armijo_sigma_{sigma}'] = {
+                    'accel': True,
+                    'precond': True,
+                    'adaptive_restart': True,
+                    'armijo': True,
+                    'armijo_iter': 20,
+                    'armijo_sigma': sigma,
+                    'armijo_beta': 0.5,
+                    'alpha_cond': 1.0,
+                }
+        
+        elif mode == 'armijo_beta_sweep':
+            for beta in [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]:
+                configs[f'PGD_armijo_beta_{beta}'] = {
                     'accel': True,
                     'precond': True,
                     'adaptive_restart': True,
                     'armijo': True,
                     'armijo_iter': 20,
                     'armijo_sigma': 0.1,
-                    'armijo_beta': 0.5,
-                    'rel_crit': 1e-5,
-                    'abs_crit': 1e-7,
+                    'armijo_beta': beta,
                     'alpha_cond': 1.0,
-                },
-                # Without preconditioning
-                {
-                    'accel': True,
-                    'precond': False,
-                    'adaptive_restart': True,
-                    'armijo': False,
-                    'rel_crit': 1e-5,
-                    'abs_crit': 1e-7,
-                    'alpha_free': 0.99,
-                },
-            ]
+                }
         
-        elif level == 'extensive':
-            grid = []
-            for accel, precond, restart, armijo in product(
-                [True, False],  # accel
-                [True, False],  # precond
-                [True, False],  # restart
-                [True, False]   # armijo
-            ):
-                if not precond and not accel:
-                    continue  # Skip vanilla PG without anything
+        elif mode == 'feature_combinations':
+            for accel, restart, armijo in [
+                (True, False, False),
+                (True, True, False),
+                (True, False, True),
+                (True, True, True),
+                (False, False, False),
+                (False, False, True),
+            ]:
+                name_parts = ['PGD']
+                if accel:
+                    name_parts.append('fista')
+                if restart:
+                    name_parts.append('restart')
+                if armijo:
+                    name_parts.append('armijo')
+                if not accel and not restart and not armijo:
+                    name_parts.append('vanilla')
+                
+                config_name = '_'.join(name_parts)
                 
                 config = {
                     'accel': accel,
-                    'precond': precond,
+                    'precond': True,
                     'adaptive_restart': restart if accel else False,
                     'armijo': armijo,
-                    'rel_crit': 1e-5,
-                    'abs_crit': 1e-7,
+                    'alpha_cond': 1.0 if armijo else 0.99,
                 }
-                
-                if precond:
-                    config['alpha_cond'] = 0.99 if not armijo else 1.0
-                else:
-                    config['alpha_free'] = 0.99
                 
                 if armijo:
                     config.update({
@@ -152,103 +194,128 @@ class OptimizationBenchmark:
                         'armijo_beta': 0.5,
                     })
                 
-                grid.append(config)
-            
-            return grid
+                configs[config_name] = config
+        
+        for name, config in configs.items():
+            config.update(self.STANDARD_PGD_CONVERGENCE)
+            config.update({
+                'max_iterations': 2000,
+                'verbose': False,
+            })
+        
+        return configs
     
-    def get_admm_hyperparameter_grid(self, level: str = 'default'):
-        """Define ADMM hyperparameter search grid"""
-        if level == 'minimal':
-            return [{
+    def get_admm_configs(self, mode: str = 'default'):
+        """Get ADMM configurations - HYPERPARAMETERS ONLY"""
+        configs = {}
+        
+        if mode == 'baseline':
+            configs['ADMM_constant'] = {
                 'rho_update_rule': 'constant',
                 'alpha': 1.0,
                 'dual_momentum': 0.0,
                 'rho_init': 0.1,
-                'rel_crit': 1e-4,
-                'abs_crit': 1e-5,
-            }]
+            }
+            configs['ADMM_linear'] = {
+                'rho_update_rule': 'linear',
+                'alpha': 1.0,
+                'dual_momentum': 0.0,
+                'rho_init': 0.1,
+                'rho_lin_factor': 2.0,
+            }
+            configs['ADMM_spectral'] = {
+                'rho_update_rule': 'spectral',
+                'alpha': 1.0,
+                'dual_momentum': 0.0,
+                'rho_power': 0.3,
+                'rho_power_factor': 0.15,
+            }
+            configs['ADMM_osqp'] = {
+                'rho_update_rule': 'osqp',
+                'alpha': 1.0,
+                'dual_momentum': 0.0,
+                'rho_init': 0.1,
+                'rho_adaptive_fraction': 0.4,
+            }
         
-        elif level == 'default':
-            return [
-                # Baseline: Constant rho
-                {
-                    'rho_update_rule': 'constant',
+        elif mode == 'rho_init_sweep':
+            for rho_init in [0.01, 0.03, 0.05, 0.1, 0.3, 0.5, 1.0]:
+                configs[f'ADMM_rho_init_{rho_init}'] = {
+                    'rho_update_rule': 'linear',
                     'alpha': 1.0,
                     'dual_momentum': 0.0,
+                    'rho_init': rho_init,
+                    'rho_lin_factor': 2.0,
+                }
+        
+        elif mode == 'alpha_sweep':
+            for alpha in [1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 1.9]:
+                configs[f'ADMM_alpha_{alpha}'] = {
+                    'rho_update_rule': 'linear',
+                    'alpha': alpha,
+                    'dual_momentum': 0.0,
                     'rho_init': 0.1,
-                    'rel_crit': 1e-4,
-                    'abs_crit': 1e-5,
-                },
-                # Linear update
-                {
+                    'rho_lin_factor': 2.0,
+                }
+        
+        elif mode == 'momentum_sweep':
+            for beta in [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]:
+                configs[f'ADMM_momentum_{beta}'] = {
+                    'rho_update_rule': 'linear',
+                    'alpha': 1.0,
+                    'dual_momentum': beta,
+                    'rho_init': 0.1,
+                    'rho_lin_factor': 2.0,
+                }
+        
+        elif mode == 'rho_factor_sweep':
+            for factor in [1.5, 2.0, 2.5, 3.0, 4.0]:
+                configs[f'ADMM_rho_factor_{factor}'] = {
                     'rho_update_rule': 'linear',
                     'alpha': 1.0,
                     'dual_momentum': 0.0,
                     'rho_init': 0.1,
-                    'rho_lin_factor': 2.0,
-                    'rel_crit': 1e-4,
-                    'abs_crit': 1e-5,
-                },
-                # OSQP-style
-                {
+                    'rho_lin_factor': factor,
+                }
+        
+        elif mode == 'osqp_fraction_sweep':
+            for fraction in [0.2, 0.3, 0.4, 0.5, 0.6, 0.7]:
+                configs[f'ADMM_osqp_frac_{fraction}'] = {
                     'rho_update_rule': 'osqp',
                     'alpha': 1.0,
                     'dual_momentum': 0.0,
                     'rho_init': 0.1,
-                    'rho_adaptive_fraction': 0.4,
-                    'rel_crit': 1e-4,
-                    'abs_crit': 1e-5,
-                },
-                # With over-relaxation
-                {
-                    'rho_update_rule': 'linear',
-                    'alpha': 1.5,
-                    'dual_momentum': 0.0,
-                    'rho_init': 0.1,
-                    'rho_lin_factor': 2.0,
-                    'rel_crit': 1e-4,
-                    'abs_crit': 1e-5,
-                },
-                # With momentum
-                {
-                    'rho_update_rule': 'linear',
-                    'alpha': 1.0,
-                    'dual_momentum': 0.5,
-                    'rho_init': 0.1,
-                    'rho_lin_factor': 2.0,
-                    'rel_crit': 1e-4,
-                    'abs_crit': 1e-5,
-                },
-            ]
+                    'rho_adaptive_fraction': fraction,
+                }
         
-        elif level == 'extensive':
-            grid = []
-            for rho_rule, alpha, momentum in product(
-                ['constant', 'linear', 'osqp'],
-                [1.0, 1.2, 1.5],
-                [0.0, 0.3, 0.7]
-            ):
-                config = {
-                    'rho_update_rule': rho_rule,
+        elif mode == 'combined_best':
+            for alpha, momentum in product([1.0, 1.3, 1.5], [0.0, 0.3, 0.5]):
+                configs[f'ADMM_alpha_{alpha}_mom_{momentum}'] = {
+                    'rho_update_rule': 'linear',
                     'alpha': alpha,
                     'dual_momentum': momentum,
                     'rho_init': 0.1,
-                    'rel_crit': 1e-4,
-                    'abs_crit': 1e-5,
+                    'rho_lin_factor': 2.0,
                 }
-                
-                if rho_rule == 'linear':
-                    config['rho_lin_factor'] = 2.0
-                elif rho_rule == 'osqp':
-                    config['rho_adaptive_fraction'] = 0.4
-                
-                grid.append(config)
-            
-            return grid
+        
+        for name, config in configs.items():
+            config.update(self.STANDARD_ADMM_CONVERGENCE)
+            config.update({
+                'max_iterations': 2000,
+                'min_residual_threshold': 1e-8,
+                'rho_clip': 1e6,
+                'prox': 1e-6,
+                'rho_update_ratio': 10.0,
+                'rho_update_cooldown': 5,
+                'verbose': False,
+            })
+        
+        return configs
     
     def run_single_benchmark(
         self, 
         solver_type: str,
+        config_name: str,
         vis: np.ndarray,
         n_sample: int,
         poly_id: int,
@@ -256,321 +323,1199 @@ class OptimizationBenchmark:
         test_point_id: int,
         hyperparams: Dict[str, Any]
     ) -> BenchmarkResult:
-        """Run a single benchmark test"""
+        """Run a single benchmark test with error handling"""
         
-        # Add common parameters
-        full_hyperparams = {
-            'max_iterations': 2000,
-            'verbose': False,
-            **hyperparams
-        }
-        
-        # Create solver
-        poly = PolygonContactPatch(
-            vis=vis,
-            mu=self.mu,
-            ker_precompute=False,
-            warmstart_strat=None,
-            solver_tyep=solver_type,
-            solver_kwargs=full_hyperparams
-        )
-        
-        # Run projection with timing
-        history = []
-        start_time = time.perf_counter()
         try:
+            poly = PolygonContactPatch(
+                vis=vis,
+                mu=self.mu,
+                ker_precompute=False,
+                warmstart_strat=None,
+                solver_tyep=solver_type,
+                solver_kwargs=hyperparams
+            )
+            
+            history = []
+            start_time = time.perf_counter()
             projected = poly.project_cone(test_point, history=history)
             elapsed = time.perf_counter() - start_time
             
-            # Extract results
             if len(history) > 0:
                 last_entry = history[-1]
-                if solver_type == 'PGD':
-                    iterations = last_entry[0] + 1  # k + 1
-                    final_obj = last_entry[1]
-                else:  # ADMM
-                    iterations = last_entry[0] + 1
-                    final_obj = last_entry[1]
+                iterations = last_entry[0] + 1
+                final_obj = float(last_entry[1])
                 converged = True
             else:
                 iterations = 0
-                final_obj = np.inf
-                converged = False
+                final_obj = 0.
+                converged = True
+            
+            if not np.isfinite(elapsed) or elapsed < 0:
+                elapsed = np.nan
                 
         except Exception as e:
-            print(f"Error in {solver_type}: {e}")
-            elapsed = np.inf
-            iterations = -1
+            warnings.warn(f"Error in {solver_type}/{config_name}: {str(e)[:100]}")
+            elapsed = .05
+            iterations = hyperparams["max_iterations"]
             converged = False
-            final_obj = np.inf
+            final_obj = float('inf')
         
         return BenchmarkResult(
             solver_type=solver_type,
+            config_name=config_name,
             n_sample=n_sample,
             polygon_id=poly_id,
             test_point_id=test_point_id,
-            hyperparams=hyperparams,
             iterations=iterations,
             time_seconds=elapsed,
             converged=converged,
-            final_objective=final_obj
+            final_objective=final_obj if np.isfinite(final_obj) else np.nan,
+            hp_dict=hyperparams.copy()
         )
     
-    def run_benchmark(
+    def run_benchmark_suite(
         self,
-        solver_types: List[str] = ['PGD', 'ADMM'],
-        grid_level: str = 'default'
+        pgd_modes: List[str] = ['baseline'],
+        admm_modes: List[str] = ['baseline']
     ):
-        """Run complete benchmark suite"""
+        """Run benchmark with specified configuration modes"""
         
-        total_runs = 0
-        for solver_type in solver_types:
-            if solver_type == 'PGD':
-                grid = self.get_pgd_hyperparameter_grid(grid_level)
-            else:
-                grid = self.get_admm_hyperparameter_grid(grid_level)
-            
-            total_runs += len(grid) * len(self.test_problems) * self.n_test_points
+        all_configs = {}
         
-        print(f"Starting benchmark: {total_runs} total runs")
+        for mode in pgd_modes:
+            configs = self.get_pgd_configs(mode)
+            for name, config in configs.items():
+                all_configs[('PGD', name)] = config
+        
+        for mode in admm_modes:
+            configs = self.get_admm_configs(mode)
+            for name, config in configs.items():
+                all_configs[('ADMM', name)] = config
+        
+        total_runs = len(all_configs) * len(self.test_problems) * self.n_test_points
+        
+        print(f"\n{'='*70}")
+        print(f"HYPERPARAMETER BENCHMARK SUITE")
+        print(f"{'='*70}")
+        print(f"Fixed PGD convergence: rel={self.STANDARD_PGD_CONVERGENCE['rel_crit']}, "
+              f"abs={self.STANDARD_PGD_CONVERGENCE['abs_crit']}")
+        print(f"Fixed ADMM convergence: rel={self.STANDARD_ADMM_CONVERGENCE['rel_crit']}, "
+              f"abs={self.STANDARD_ADMM_CONVERGENCE['abs_crit']}")
+        print(f"\nTotal configurations: {len(all_configs)}")
+        print(f"Total test problems: {len(self.test_problems)}")
+        print(f"Test points per problem: {self.n_test_points}")
+        print(f"Total runs: {total_runs}")
+        print(f"{'='*70}\n")
         
         run_count = 0
-        for solver_type in solver_types:
-            print(f"\n{'='*70}")
-            print(f"Benchmarking {solver_type}")
-            print(f"{'='*70}")
-            
-            if solver_type == 'PGD':
-                grid = self.get_pgd_hyperparameter_grid(grid_level)
-            else:
-                grid = self.get_admm_hyperparameter_grid(grid_level)
-            
-            for hyperparam_id, hyperparams in enumerate(grid):
-                print(f"\nHyperparameter config {hyperparam_id + 1}/{len(grid)}")
-                print(f"  Config: {hyperparams}")
-                
-                for problem in self.test_problems:
-                    for point_id, test_point in enumerate(problem['test_points']):
-                        result = self.run_single_benchmark(
-                            solver_type=solver_type,
-                            vis=problem['vis'],
-                            n_sample=problem['n_sample'],
-                            poly_id=problem['poly_id'],
-                            test_point=test_point,
-                            test_point_id=point_id,
-                            hyperparams=hyperparams
-                        )
-                        
-                        self.results.append(result)
-                        run_count += 1
-                        
-                        if run_count % 50 == 0:
-                            print(f"  Progress: {run_count}/{total_runs} ({100*run_count/total_runs:.1f}%)")
+        last_percent = 0
         
-        print(f"\nBenchmark complete! {len(self.results)} results collected.")
+        for (solver_type, config_name), hyperparams in all_configs.items():
+            print(f"\n[{solver_type}] {config_name}")
+            
+            for problem in self.test_problems:
+                for point_id, test_point in enumerate(problem['test_points']):
+                    result = self.run_single_benchmark(
+                        solver_type=solver_type,
+                        config_name=config_name,
+                        vis=problem['vis'],
+                        n_sample=problem['n_sample'],
+                        poly_id=problem['poly_id'],
+                        test_point=test_point,
+                        test_point_id=point_id,
+                        hyperparams=hyperparams
+                    )
+                    
+                    self.results.append(result)
+                    run_count += 1
+                    
+                    percent = int(100 * run_count / total_runs)
+                    if percent > last_percent and percent % 5 == 0:
+                        print(f"  Progress: {percent}% ({run_count}/{total_runs})")
+                        last_percent = percent
+        
+        print(f"\n{'='*70}")
+        print(f"✓ Benchmark complete! {len(self.results)} results collected.")
+        print(f"{'='*70}\n")
+        
         return self
     
     def get_results_dataframe(self) -> pd.DataFrame:
         """Convert results to pandas DataFrame"""
-        data = []
-        for result in self.results:
-            row = {
-                'solver': result.solver_type,
-                'n_sample': result.n_sample,
-                'polygon_id': result.polygon_id,
-                'test_point_id': result.test_point_id,
-                'iterations': result.iterations,
-                'time_seconds': result.time_seconds,
-                'time_ms': result.time_seconds * 1000,
-                'converged': result.converged,
-                'final_objective': result.final_objective,
-            }
-            
-            # Add hyperparameters as separate columns
-            for key, value in result.hyperparams.items():
-                row[f'hp_{key}'] = value
-            
-            data.append(row)
+        data = [result.to_dict() for result in self.results]
+        df = pd.DataFrame(data)
         
-        return pd.DataFrame(data)
-    
-    def analyze_results(self):
-        """Generate analysis and visualizations"""
-        df = self.get_results_dataframe()
+        if 'time_seconds' in df.columns:
+            df['time_ms'] = df['time_seconds'] * 1000
         
-        print("\n" + "="*70)
-        print("BENCHMARK RESULTS ANALYSIS")
-        print("="*70)
-        
-        # Overall statistics
-        print("\n1. OVERALL STATISTICS")
-        print("-" * 70)
-        for solver in df['solver'].unique():
-            solver_df = df[df['solver'] == solver]
-            print(f"\n{solver}:")
-            print(f"  Total runs: {len(solver_df)}")
-            print(f"  Converged: {solver_df['converged'].sum()} ({100*solver_df['converged'].mean():.1f}%)")
-            print(f"  Avg iterations: {solver_df['iterations'].mean():.1f} ± {solver_df['iterations'].std():.1f}")
-            print(f"  Avg time: {solver_df['time_ms'].mean():.2f} ± {solver_df['time_ms'].std():.2f} ms")
-            print(f"  Median time: {solver_df['time_ms'].median():.2f} ms")
-        
-        # By problem size
-        print("\n2. PERFORMANCE BY PROBLEM SIZE (N_SAMPLE)")
-        print("-" * 70)
-        for n_sample in sorted(df['n_sample'].unique()):
-            print(f"\nN_sample = {n_sample}:")
-            for solver in df['solver'].unique():
-                subset = df[(df['solver'] == solver) & (df['n_sample'] == n_sample)]
-                print(f"  {solver}: {subset['iterations'].mean():.1f} iter, "
-                      f"{subset['time_ms'].mean():.2f} ms")
-        
-        # Best hyperparameters
-        print("\n3. BEST HYPERPARAMETER CONFIGURATIONS")
-        print("-" * 70)
-        
-        for solver in df['solver'].unique():
-            solver_df = df[df['solver'] == solver]
-            
-            # Group by hyperparameters
-            hp_cols = [col for col in solver_df.columns if col.startswith('hp_')]
-            if len(hp_cols) > 0:
-                grouped = solver_df.groupby(hp_cols).agg({
-                    'iterations': ['mean', 'std'],
-                    'time_ms': ['mean', 'std'],
-                    'converged': 'mean'
-                }).reset_index()
-                
-                # Sort by average time
-                grouped = grouped.sort_values(('time_ms', 'mean'))
-                
-                print(f"\n{solver} - Top 3 configurations by speed:")
-                for i, row in grouped.head(3).iterrows():
-                    print(f"\n  Rank {i+1}:")
-                    print(f"    Time: {row[('time_ms', 'mean')]:.2f} ± {row[('time_ms', 'std')]:.2f} ms")
-                    print(f"    Iterations: {row[('iterations', 'mean')]:.1f} ± {row[('iterations', 'std')]:.1f}")
-                    print(f"    Convergence rate: {row[('converged', 'mean')]*100:.1f}%")
-                    print(f"    Config:")
-                    for col in hp_cols:
-                        print(f"      {col.replace('hp_', '')}: {row[col]}")
+        if 'time_seconds' in df.columns:
+            n_before = len(df)
+            df = df[df['time_seconds'].notna()]
+            n_removed = n_before - len(df)
+            if n_removed > 0:
+                print(f"⚠ Removed {n_removed} failed runs with NaN timings")
         
         return df
     
-    def plot_results(self, df: pd.DataFrame = None, save_path: str = None):
-        """Generate visualization plots"""
+    def analyze_solution_quality(self, df: pd.DataFrame = None):
+        """Analyze actual solution quality achieved by each solver"""
         if df is None:
             df = self.get_results_dataframe()
         
+        print("\n" + "="*70)
+        print("SOLUTION QUALITY ANALYSIS")
+        print("="*70)
+        print("\nThis checks if both solvers achieve similar final accuracy,")
+        print("validating that the convergence criteria comparison is fair.")
+        print("-"*70)
+        
+        for solver in df['solver_type'].unique():
+            solver_df = df[df['solver_type'] == solver]
+            converged = solver_df[solver_df['converged']]
+            
+            if len(converged) == 0:
+                print(f"\n{solver}: No converged cases!")
+                continue
+            
+            print(f"\n{solver} (converged cases only, n={len(converged)}):")
+            print(f"  Final Objective Statistics:")
+            print(f"    Median:         {converged['final_objective'].median():.3e}")
+            print(f"    Mean:           {converged['final_objective'].mean():.3e}")
+            print(f"    Std:            {converged['final_objective'].std():.3e}")
+            print(f"    Min:            {converged['final_objective'].min():.3e}")
+            print(f"    Max:            {converged['final_objective'].max():.3e}")
+            print(f"    95th percentile: {converged['final_objective'].quantile(0.95):.3e}")
+        
+        # Compare solvers
+        if len(df['solver_type'].unique()) > 1:
+            print("\n" + "-"*70)
+            print("FAIRNESS CHECK:")
+            medians = {}
+            for solver in df['solver_type'].unique():
+                converged = df[(df['solver_type'] == solver) & (df['converged'])]
+                if len(converged) > 0:
+                    medians[solver] = converged['final_objective'].median()
+            
+            if len(medians) == 2:
+                solvers = list(medians.keys())
+                ratio = medians[solvers[0]] / medians[solvers[1]]
+                print(f"  Median objective ratio ({solvers[0]}/{solvers[1]}): {ratio:.2f}")
+                
+                if 0.1 < ratio < 10:
+                    print(f"  ✓ Solvers achieve similar accuracy (ratio within 10×)")
+                    print(f"  ✓ Convergence criteria comparison is FAIR")
+                else:
+                    print(f"  ⚠ Solvers achieve different accuracy (ratio > 10×)")
+                    print(f"  ⚠ Consider adjusting convergence criteria")
+        
+        print("="*70)
+    
+    def diagnose_failures(self, df: pd.DataFrame = None):
+        """Comprehensive failure diagnosis with detailed analysis"""
+        if df is None:
+            df = self.get_results_dataframe()
+        
+        print("\n" + "="*70)
+        print("FAILURE DIAGNOSIS")
+        print("="*70)
+        
+        failed = df[~df['converged']]
+        success = df[df['converged']]
+        
+        total_failures = len(failed)
+        total_runs = len(df)
+        failure_rate = 100 * total_failures / total_runs
+        
+        print(f"\nOVERALL FAILURE STATISTICS:")
+        print(f"  Total runs:     {total_runs}")
+        print(f"  Failures:       {total_failures}")
+        print(f"  Failure rate:   {failure_rate:.2f}%")
+        print(f"  Success rate:   {100 - failure_rate:.2f}%")
+        
+        if total_failures == 0:
+            print("\n✓ No failures detected!")
+            return None
+        
+        # 1. By solver type
+        print("\n" + "-"*70)
+        print("FAILURES BY SOLVER TYPE:")
+        for solver in df['solver_type'].unique():
+            solver_failed = len(failed[failed['solver_type'] == solver])
+            solver_total = len(df[df['solver_type'] == solver])
+            solver_rate = 100 * solver_failed / solver_total
+            print(f"  {solver:8s}: {solver_failed:4d} / {solver_total:4d} ({solver_rate:5.2f}%)")
+        
+        # Check if failure rate is similar across solvers
+        solver_rates = []
+        for solver in df['solver_type'].unique():
+            solver_failed = len(failed[failed['solver_type'] == solver])
+            solver_total = len(df[df['solver_type'] == solver])
+            solver_rates.append(100 * solver_failed / solver_total)
+        
+        if len(solver_rates) > 1:
+            rate_std = np.std(solver_rates)
+            if rate_std < 2.0:
+                print(f"\n  → Failure rates are similar across solvers (std={rate_std:.2f}%)")
+                print(f"  → Failures are likely PROBLEM-DEPENDENT, not solver-dependent")
+            else:
+                print(f"\n  → Failure rates vary across solvers (std={rate_std:.2f}%)")
+                print(f"  → Some solvers may be more robust than others")
+        
+        # 2. By configuration
+        print("\n" + "-"*70)
+        print("FAILURES BY CONFIGURATION (worst 5):")
+        config_failures = failed.groupby('config_name').size().sort_values(ascending=False)
+        config_totals = df.groupby('config_name').size()
+        config_rates = (config_failures / config_totals * 100).sort_values(ascending=False)
+        
+        for config, rate in config_rates.head(5).items():
+            count = config_failures[config]
+            total = config_totals[config]
+            print(f"  {config:40s}: {count:3d} / {total:3d} ({rate:5.2f}%)")
+        
+        # 3. By problem size
+        print("\n" + "-"*70)
+        print("FAILURES BY PROBLEM SIZE:")
+        for n in sorted(df['n_sample'].unique()):
+            n_failed = len(failed[failed['n_sample'] == n])
+            n_total = len(df[df['n_sample'] == n])
+            n_rate = 100 * n_failed / n_total
+            print(f"  n_sample={n:2d}: {n_failed:4d} / {n_total:4d} ({n_rate:5.2f}%)")
+        
+        # 4. By specific polygon
+        print("\n" + "-"*70)
+        print("MOST PROBLEMATIC POLYGONS (top 10):")
+        poly_failures = failed.groupby(['n_sample', 'polygon_id']).size()
+        poly_totals = df.groupby(['n_sample', 'polygon_id']).size()
+        poly_rates = (poly_failures / poly_totals * 100).sort_values(ascending=False)
+        
+        for (n, poly_id), rate in poly_rates.head(10).items():
+            count = poly_failures[(n, poly_id)]
+            total = poly_totals[(n, poly_id)]
+            print(f"  n_sample={n:2d}, poly_id={poly_id:2d}: {count:3d} / {total:3d} ({rate:5.2f}%)")
+        
+        # Check if failures are concentrated
+        n_problematic_polygons = (poly_rates > 50).sum()
+        total_polygons = len(poly_rates)
+        if n_problematic_polygons > 0:
+            print(f"\n  → {n_problematic_polygons} / {total_polygons} polygons have >50% failure rate")
+            print(f"  → Failures are CONCENTRATED in specific degenerate geometries")
+        else:
+            print(f"\n  → Failures are DISTRIBUTED across polygons")
+            print(f"  → Not due to specific bad geometries")
+        
+        # 5. Iterations analysis
+        print("\n" + "-"*70)
+        print("ITERATION ANALYSIS:")
+        
+        max_iter = df['hp_max_iterations'].iloc[0] if 'hp_max_iterations' in df.columns else 2000
+        
+        if total_failures > 0:
+            print(f"\nFailed cases:")
+            print(f"  Mean iterations:   {failed['iterations'].mean():.1f}")
+            print(f"  Median iterations: {failed['iterations'].median():.1f}")
+            print(f"  Max iterations:    {failed['iterations'].max()}")
+            print(f"  Max allowed:       {max_iter}")
+            
+            # Check if hitting max iterations
+            at_max = (failed['iterations'] >= max_iter - 10).sum()
+            at_max_rate = 100 * at_max / total_failures
+            
+            print(f"\n  Cases at/near max iterations: {at_max} / {total_failures} ({at_max_rate:.1f}%)")
+            
+            if at_max_rate > 80:
+                print(f"\n  ⚠️  DIAGNOSIS: Most failures hit max iterations!")
+                print(f"  → Solution: Increase max_iterations to {max_iter * 2}-{max_iter * 3}")
+                print(f"  → The solver is making progress but needs more time")
+            elif at_max_rate > 20:
+                print(f"\n  ⚠️  DIAGNOSIS: Some failures hit max iterations")
+                print(f"  → Mixed cause: both iteration limit and problem issues")
+            else:
+                print(f"\n  ℹ️  DIAGNOSIS: Failures NOT due to iteration limit")
+                print(f"  → Failures occur early, likely due to:")
+                print(f"     - Numerical issues (ill-conditioning)")
+                print(f"     - Degenerate geometries")
+                print(f"     - Infeasible subproblems")
+        
+        # 6. Objective values at failure
+        print("\n" + "-"*70)
+        print("OBJECTIVE VALUES AT FAILURE:")
+        
+        failed_with_obj = failed[np.isfinite(failed['final_objective'])]
+        if len(failed_with_obj) > 0:
+            print(f"  Mean:   {failed_with_obj['final_objective'].mean():.3e}")
+            print(f"  Median: {failed_with_obj['final_objective'].median():.3e}")
+            print(f"  Min:    {failed_with_obj['final_objective'].min():.3e}")
+            print(f"  Max:    {failed_with_obj['final_objective'].max():.3e}")
+            
+            # Compare to successful cases
+            if len(success) > 0:
+                success_median = success['final_objective'].median()
+                failed_median = failed_with_obj['final_objective'].median()
+                ratio = failed_median / success_median
+                
+                print(f"\n  Success median:  {success_median:.3e}")
+                print(f"  Failed median:   {failed_median:.3e}")
+                print(f"  Ratio:           {ratio:.2f}×")
+                
+                if ratio < 10:
+                    print(f"\n  ℹ️  Failed cases are close to optimal!")
+                    print(f"  → May just need slightly looser convergence criteria")
+                else:
+                    print(f"\n  ⚠️  Failed cases have much higher objective")
+                    print(f"  → Solver is stuck far from optimum")
+        
+        print("\n" + "="*70)
+        
+        return failed
+    
+    def plot_failure_analysis(self, df: pd.DataFrame = None, save_prefix: str = None):
+        """Generate visualizations for failure analysis"""
+        if df is None:
+            df = self.get_results_dataframe()
+        
+        failed = df[~df['converged']]
+        success = df[df['converged']]
+        
+        if len(failed) == 0:
+            print("No failures to visualize!")
+            return
+        
         fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-        fig.suptitle('Optimization Solver Benchmark Results', fontsize=16, fontweight='bold')
+        fig.suptitle('Failure Analysis', fontsize=16, fontweight='bold')
         
-        # 1. Time distribution by solver
+        # 1. Failure rate by solver
         ax = axes[0, 0]
-        df.boxplot(column='time_ms', by='solver', ax=ax)
-        ax.set_title('Computation Time Distribution')
-        ax.set_xlabel('Solver')
-        ax.set_ylabel('Time (ms)')
-        plt.sca(ax)
-        plt.xticks(rotation=0)
+        failure_by_solver = []
+        for solver in df['solver_type'].unique():
+            rate = 100 * len(failed[failed['solver_type'] == solver]) / len(df[df['solver_type'] == solver])
+            failure_by_solver.append((solver, rate))
         
-        # 2. Iterations distribution by solver
+        solvers, rates = zip(*failure_by_solver)
+        ax.bar(solvers, rates, color=['steelblue', 'coral'])
+        ax.set_ylabel('Failure Rate (%)')
+        ax.set_title('Failure Rate by Solver')
+        ax.set_ylim([0, max(rates) * 1.2 if max(rates) > 0 else 10])
+        ax.grid(axis='y', alpha=0.3)
+        
+        # 2. Failure rate by problem size
         ax = axes[0, 1]
-        df.boxplot(column='iterations', by='solver', ax=ax)
-        ax.set_title('Iterations Distribution')
-        ax.set_xlabel('Solver')
-        ax.set_ylabel('Iterations')
-        plt.sca(ax)
-        plt.xticks(rotation=0)
+        n_samples = sorted(df['n_sample'].unique())
+        failure_rates = []
+        for n in n_samples:
+            rate = 100 * len(failed[failed['n_sample'] == n]) / len(df[df['n_sample'] == n])
+            failure_rates.append(rate)
         
-        # 3. Time vs n_sample
+        ax.plot(n_samples, failure_rates, 'o-', linewidth=2, markersize=8, color='crimson')
+        ax.set_xlabel('N_sample')
+        ax.set_ylabel('Failure Rate (%)')
+        ax.set_title('Failure Rate vs Problem Size')
+        ax.grid(True, alpha=0.3)
+        
+        # 3. Iterations: failed vs success
         ax = axes[0, 2]
-        for solver in df['solver'].unique():
-            subset = df[df['solver'] == solver]
-            grouped = subset.groupby('n_sample')['time_ms'].agg(['mean', 'std'])
-            ax.errorbar(grouped.index, grouped['mean'], yerr=grouped['std'], 
-                       marker='o', label=solver, capsize=5)
-        ax.set_title('Time vs Problem Size')
-        ax.set_xlabel('N_sample')
-        ax.set_ylabel('Time (ms)')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        if len(success) > 0 and len(failed) > 0:
+            data_to_plot = [
+                success['iterations'].values,
+                failed['iterations'].values
+            ]
+            bp = ax.boxplot(data_to_plot, labels=['Success', 'Failed'], patch_artist=True)
+            bp['boxes'][0].set_facecolor('lightgreen')
+            bp['boxes'][1].set_facecolor('lightcoral')
+            ax.set_ylabel('Iterations')
+            ax.set_title('Iterations: Success vs Failed')
+            ax.grid(axis='y', alpha=0.3)
         
-        # 4. Iterations vs n_sample
+        # 4. Objective: failed vs success
         ax = axes[1, 0]
-        for solver in df['solver'].unique():
-            subset = df[df['solver'] == solver]
-            grouped = subset.groupby('n_sample')['iterations'].agg(['mean', 'std'])
-            ax.errorbar(grouped.index, grouped['mean'], yerr=grouped['std'], 
-                       marker='o', label=solver, capsize=5)
-        ax.set_title('Iterations vs Problem Size')
-        ax.set_xlabel('N_sample')
-        ax.set_ylabel('Iterations')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        if len(success) > 0 and len(failed) > 0:
+            success_obj = success[np.isfinite(success['final_objective'])]['final_objective']
+            failed_obj = failed[np.isfinite(failed['final_objective'])]['final_objective']
+            
+            if len(success_obj) > 0 and len(failed_obj) > 0:
+                data_to_plot = [
+                    np.log10(success_obj.values + 1e-15),
+                    np.log10(failed_obj.values + 1e-15)
+                ]
+                bp = ax.boxplot(data_to_plot, labels=['Success', 'Failed'], patch_artist=True)
+                bp['boxes'][0].set_facecolor('lightgreen')
+                bp['boxes'][1].set_facecolor('lightcoral')
+                ax.set_ylabel('log10(Final Objective)')
+                ax.set_title('Final Objective: Success vs Failed')
+                ax.grid(axis='y', alpha=0.3)
         
-        # 5. Convergence rate
+        # 5. Heatmap of failures by polygon
         ax = axes[1, 1]
-        convergence = df.groupby('solver')['converged'].mean() * 100
-        convergence.plot(kind='bar', ax=ax, color=["#16476a", '#ff7f0e'])
-        ax.set_title('Convergence Rate')
-        ax.set_ylabel('Convergence Rate (%)')
-        ax.set_xlabel('Solver')
-        plt.sca(ax)
-        plt.xticks(rotation=0)
-        ax.grid(True, axis='y', alpha=0.3)
         
-        # 6. Time vs Iterations scatter
+        # Create failure matrix
+        n_samples_list = sorted(df['n_sample'].unique())
+        max_poly_id = df['polygon_id'].max() + 1
+        
+        failure_matrix = np.zeros((len(n_samples_list), max_poly_id))
+        
+        for i, n in enumerate(n_samples_list):
+            for poly_id in range(max_poly_id):
+                subset = df[(df['n_sample'] == n) & (df['polygon_id'] == poly_id)]
+                if len(subset) > 0:
+                    failure_matrix[i, poly_id] = 100 * (~subset['converged']).sum() / len(subset)
+        
+        im = ax.imshow(failure_matrix, aspect='auto', cmap='YlOrRd', interpolation='nearest')
+        ax.set_xlabel('Polygon ID')
+        ax.set_ylabel('N_sample')
+        ax.set_yticks(range(len(n_samples_list)))
+        ax.set_yticklabels(n_samples_list)
+        ax.set_title('Failure Rate by Polygon (%)')
+        plt.colorbar(im, ax=ax, label='Failure Rate (%)')
+        
+        # 6. Time distribution: failed vs success
         ax = axes[1, 2]
-        for solver in df['solver'].unique():
-            subset = df[df['solver'] == solver]
-            ax.scatter(subset['iterations'], subset['time_ms'], 
-                      alpha=0.5, label=solver, s=20)
-        ax.set_title('Time vs Iterations')
-        ax.set_xlabel('Iterations')
-        ax.set_ylabel('Time (ms)')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        if len(success) > 0 and len(failed) > 0:
+            success_time = success[np.isfinite(success['time_ms'])]['time_ms']
+            failed_time = failed[np.isfinite(failed['time_ms'])]['time_ms']
+            
+            if len(success_time) > 0 and len(failed_time) > 0:
+                bins = np.linspace(0, max(success_time.max(), failed_time.max()), 30)
+                ax.hist(success_time, bins=bins, alpha=0.6, label='Success', color='green')
+                ax.hist(failed_time, bins=bins, alpha=0.6, label='Failed', color='red')
+                ax.set_xlabel('Time (ms)')
+                ax.set_ylabel('Count')
+                ax.set_title('Time Distribution')
+                ax.legend()
+                ax.grid(axis='y', alpha=0.3)
         
         plt.tight_layout()
         
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"\nPlot saved to: {save_path}")
+        if save_prefix:
+            filename = f'{save_prefix}_failure_analysis.png'
+            plt.savefig(filename, dpi=300, bbox_inches='tight')
+            print(f"✓ Saved: {filename}")
         
         plt.show()
+    
+    def print_top_configurations(self, df: pd.DataFrame = None, top_n: int = 3):
+        """Print top N configurations with full hyperparameters"""
+        if df is None:
+            df = self.get_results_dataframe()
         
-        return fig
+        print("\n" + "="*70)
+        print("TOP CONFIGURATIONS (by median time)")
+        print("="*70)
+        
+        for solver in ['PGD', 'ADMM']:
+            solver_df = df[df['solver_type'] == solver]
+            
+            if len(solver_df) == 0:
+                continue
+            
+            # Group by config and calculate metrics
+            config_stats = solver_df.groupby('config_name').agg({
+                'time_ms': 'median',
+                'iterations': 'mean',
+                'converged': lambda x: 100 * x.mean()
+            }).sort_values('time_ms')
+            
+            print(f"\n{'='*70}")
+            print(f"{solver} - TOP {top_n} CONFIGURATIONS")
+            print(f"{'='*70}")
+            
+            for rank, (config_name, stats) in enumerate(config_stats.head(top_n).iterrows(), 1):
+                print(f"\n{'#'*70}")
+                print(f"RANK {rank}: {config_name}")
+                print(f"{'#'*70}")
+                print(f"  Median Time:      {stats['time_ms']:.3f} ms")
+                print(f"  Mean Iterations:  {stats['iterations']:.1f}")
+                print(f"  Convergence Rate: {stats['converged']:.1f}%")
+                print(f"\n  Full Hyperparameter Configuration:")
+                print(f"  {'-'*66}")
+                
+                # Get the hyperparameters for this config
+                sample_result = solver_df[solver_df['config_name'] == config_name].iloc[0]
+                hp_cols = [col for col in solver_df.columns if col.startswith('hp_')]
+                
+                config_dict = {}
+                for col in hp_cols:
+                    key = col.replace('hp_', '')
+                    value = sample_result[col]
+                    config_dict[key] = value
+                
+                # Pretty print the dict
+                print("  {")
+                for key, value in sorted(config_dict.items()):
+                    if isinstance(value, float):
+                        print(f"    '{key}': {value},")
+                    elif isinstance(value, bool):
+                        print(f"    '{key}': {value},")
+                    else:
+                        print(f"    '{key}': '{value}',")
+                print("  }")
+        
+        print(f"\n{'='*70}\n")
+    
+    def analyze_by_config(self, df: pd.DataFrame = None):
+        """Analyze results grouped by configuration"""
+        if df is None:
+            df = self.get_results_dataframe()
+        
+        print("\n" + "="*70)
+        print("PERFORMANCE BY CONFIGURATION")
+        print("="*70)
+        
+        grouped = df.groupby(['solver_type', 'config_name']).agg({
+            'iterations': ['mean', 'std', 'min', 'max'],
+            'time_ms': ['mean', 'std', 'median'],
+            'converged': ['sum', 'count'],
+            'final_objective': 'mean'
+        }).round(3)
+        
+        grouped[('converged', 'rate_%')] = (
+            100 * grouped[('converged', 'sum')] / grouped[('converged', 'count')]
+        ).round(1)
+        
+        grouped = grouped.sort_values(('time_ms', 'median'))
+        
+        print("\nSummary table (sorted by median time):")
+        print(grouped.to_string())
+        
+        return grouped
+    
+    def plot_config_comparison(self, df: pd.DataFrame = None, save_prefix: str = None):
+        """Generate detailed comparison plots"""
+        if df is None:
+            df = self.get_results_dataframe()
+        
+        for solver in df['solver_type'].unique():
+            solver_df = df[df['solver_type'] == solver]
+            
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            fig.suptitle(f'{solver} Hyperparameter Configuration Comparison', 
+                        fontsize=16, fontweight='bold')
+            
+            # 1. Time by config
+            ax = axes[0, 0]
+            config_stats = solver_df.groupby('config_name')['time_ms'].median().sort_values()
+            config_stats.plot(kind='barh', ax=ax, color='steelblue')
+            ax.set_xlabel('Median Time (ms)')
+            ax.set_title('Median Computation Time')
+            ax.grid(axis='x', alpha=0.3)
+            
+            # 2. Iterations by config
+            ax = axes[0, 1]
+            config_stats = solver_df.groupby('config_name')['iterations'].median().sort_values()
+            config_stats.plot(kind='barh', ax=ax, color='coral')
+            ax.set_xlabel('Median Iterations')
+            ax.set_title('Median Iterations')
+            ax.grid(axis='x', alpha=0.3)
+            
+            # 3. Convergence rate
+            ax = axes[1, 0]
+            conv_rate = solver_df.groupby('config_name')['converged'].mean() * 100
+            conv_rate = conv_rate.sort_values(ascending=False)
+            conv_rate.plot(kind='barh', ax=ax, color='seagreen')
+            ax.set_xlabel('Convergence Rate (%)')
+            ax.set_title('Convergence Rate')
+            ax.set_xlim([0, 105])
+            ax.grid(axis='x', alpha=0.3)
+            
+            # 4. Time vs problem size
+            ax = axes[1, 1]
+            top_configs = solver_df.groupby('config_name')['time_ms'].median().nsmallest(5).index
+            for config in top_configs:
+                subset = solver_df[solver_df['config_name'] == config]
+                grouped = subset.groupby('n_sample')['time_ms'].median()
+                ax.plot(grouped.index, grouped.values, 'o-', label=config, linewidth=2)
+            ax.set_xlabel('N_sample')
+            ax.set_ylabel('Median Time (ms)')
+            ax.set_title('Time vs Problem Size (top 5 configs)')
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            
+            if save_prefix:
+                filename = f'{save_prefix}_{solver}_configs.png'
+                plt.savefig(filename, dpi=300, bbox_inches='tight')
+                print(f"✓ Saved: {filename}")
+            
+            plt.show()
+    
+    def plot_hyperparameter_effects(self, df: pd.DataFrame = None, save_prefix: str = None):
+        """Plot effects of individual hyperparameters"""
+        if df is None:
+            df = self.get_results_dataframe()
+        
+        hp_cols = [col for col in df.columns if col.startswith('hp_')]
+        
+        for solver in df['solver_type'].unique():
+            solver_df = df[df['solver_type'] == solver]
+            
+            varying_hps = []
+            for col in hp_cols:
+                if solver_df[col].nunique() > 1:
+                    varying_hps.append(col)
+            
+            if len(varying_hps) == 0:
+                continue
+            
+            n_plots = min(len(varying_hps), 6)
+            fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+            axes = axes.flatten()
+            fig.suptitle(f'{solver} Hyperparameter Effects on Performance', 
+                        fontsize=16, fontweight='bold')
+            
+            for idx, hp_col in enumerate(varying_hps[:n_plots]):
+                ax = axes[idx]
+                hp_name = hp_col.replace('hp_', '')
+                
+                hp_stats = solver_df.groupby(hp_col).agg({
+                    'time_ms': 'median',
+                    'iterations': 'median',
+                })
+                
+                x_vals = hp_stats.index.astype(str)
+                ax2 = ax.twinx()
+                
+                ax.plot(x_vals, hp_stats['time_ms'], 
+                       'o-', color='steelblue', linewidth=2, markersize=8, label='Time')
+                ax2.plot(x_vals, hp_stats['iterations'], 
+                        's-', color='coral', linewidth=2, markersize=8, label='Iterations')
+                
+                ax.set_xlabel(hp_name, fontsize=11, fontweight='bold')
+                ax.set_ylabel('Median Time (ms)', color='steelblue', fontsize=10)
+                ax2.set_ylabel('Median Iterations', color='coral', fontsize=10)
+                ax.tick_params(axis='y', labelcolor='steelblue')
+                ax2.tick_params(axis='y', labelcolor='coral')
+                ax.grid(True, alpha=0.3)
+                
+                if len(x_vals) > 5:
+                    ax.tick_params(axis='x', rotation=45)
+            
+            for idx in range(n_plots, len(axes)):
+                axes[idx].axis('off')
+            
+            plt.tight_layout()
+            
+            if save_prefix:
+                filename = f'{save_prefix}_{solver}_hyperparams.png'
+                plt.savefig(filename, dpi=300, bbox_inches='tight')
+                print(f"✓ Saved: {filename}")
+            
+            plt.show()
 
-# Usage example
-def run_complete_benchmark():
-    """Run the complete benchmark suite"""
-    
-    # Create benchmark
+    def extract_failure_examples(self, df: pd.DataFrame = None, n_examples: int = 4):
+        """Extract actual polygon geometries and test points that caused failures"""
+        if df is None:
+            df = self.get_results_dataframe()
+        
+        failed = df[~df['converged']]
+        
+        if len(failed) == 0:
+            print("No failures to extract!")
+            return []
+        
+        print("\n" + "="*70)
+        print(f"EXTRACTING {n_examples} FAILURE CASE EXAMPLES")
+        print("="*70)
+        
+        # Select diverse failure examples
+        # Strategy: pick from different problem sizes and polygons
+        examples = []
+        
+        # Group by n_sample and polygon_id to get diversity
+        failure_groups = failed.groupby(['n_sample', 'polygon_id'])
+        
+        selected_groups = []
+        for (n_sample, poly_id), group in failure_groups:
+            if len(group) > 0:
+                selected_groups.append((n_sample, poly_id, group))
+        
+        # Sort by failure count (most problematic first)
+        selected_groups.sort(key=lambda x: len(x[2]), reverse=True)
+        
+        # Select n_examples from different groups
+        for idx, (n_sample, poly_id, group) in enumerate(selected_groups[:n_examples]):
+            # Pick one failure case from this group
+            failure_case = group.iloc[0]
+            
+            # Find the original test problem
+            test_problem = None
+            for problem in self.test_problems:
+                if problem['n_sample'] == n_sample and problem['poly_id'] == poly_id:
+                    test_problem = problem
+                    break
+            
+            if test_problem is None:
+                continue
+            
+            # Get the test point
+            test_point_id = failure_case['test_point_id']
+            test_point = test_problem['test_points'][test_point_id]
+            
+            example = {
+                'example_id': idx + 1,
+                'n_sample': n_sample,
+                'polygon_id': poly_id,
+                'test_point_id': test_point_id,
+                'vis': test_problem['vis'].copy(),
+                'test_point': test_point.copy(),
+                'solver_type': failure_case['solver_type'],
+                'config_name': failure_case['config_name'],
+                'iterations': failure_case['iterations'],
+                'final_objective': failure_case['final_objective'],
+            }
+            
+            examples.append(example)
+            
+            # Print example
+            print(f"\n{'='*70}")
+            print(f"FAILURE EXAMPLE #{idx + 1}")
+            print(f"{'='*70}")
+            print(f"Problem Size:     n_sample = {n_sample}")
+            print(f"Polygon ID:       {poly_id}")
+            print(f"Test Point ID:    {test_point_id}")
+            print(f"Solver:           {failure_case['solver_type']}")
+            print(f"Configuration:    {failure_case['config_name']}")
+            print(f"Iterations:       {failure_case['iterations']}")
+            print(f"Final Objective:  {failure_case['final_objective']:.6e}")
+            print(f"\nPolygon vertices shape: {test_problem['vis'].shape}")
+            print(f"Test point (force in R^6):")
+            print(f"  {test_point}")
+            print(f"  Norm: {np.linalg.norm(test_point):.6f}")
+            
+            # Show first few vertices
+            print(f"\nFirst 3 vertices of polygon:")
+            for i in range(min(3, len(test_problem['vis']))):
+                print(f"  v[{i}]: {test_problem['vis'][i]}")
+            
+        print(f"\n{'='*70}")
+        print(f"Extracted {len(examples)} failure examples")
+        print(f"{'='*70}\n")
+        
+        return examples
+
+    def save_failure_examples(self, examples: List[Dict], filename: str = 'failure_examples.npz'):
+        """Save failure examples to file for later reproduction"""
+        if len(examples) == 0:
+            print("No examples to save!")
+            return
+        
+        # Prepare data for saving
+        save_dict = {}
+        
+        for ex in examples:
+            prefix = f"example_{ex['example_id']}"
+            save_dict[f"{prefix}_n_sample"] = ex['n_sample']
+            save_dict[f"{prefix}_polygon_id"] = ex['polygon_id']
+            save_dict[f"{prefix}_test_point_id"] = ex['test_point_id']
+            save_dict[f"{prefix}_vis"] = ex['vis']
+            save_dict[f"{prefix}_test_point"] = ex['test_point']
+            save_dict[f"{prefix}_solver"] = ex['solver_type']
+            save_dict[f"{prefix}_config"] = ex['config_name']
+            save_dict[f"{prefix}_iterations"] = ex['iterations']
+            save_dict[f"{prefix}_final_obj"] = ex['final_objective']
+        
+        save_dict['n_examples'] = len(examples)
+        save_dict['mu'] = self.mu
+        
+        np.savez(filename, **save_dict)
+        print(f"✓ Saved {len(examples)} failure examples to: {filename}")
+
+    def print_failure_examples_code(self, examples: List[Dict]):
+        """Print Python code to reproduce failure cases"""
+        if len(examples) == 0:
+            print("No examples to print!")
+            return
+        
+        print("\n" + "="*70)
+        print("PYTHON CODE TO REPRODUCE FAILURE CASES")
+        print("="*70)
+        print("\n# Copy-paste this code to reproduce the failure cases:\n")
+        
+        print("import numpy as np")
+        print("from your_module import PolygonContactPatch  # Adjust import as needed")
+        print()
+        
+        for ex in examples:
+            print(f"# {'='*66}")
+            print(f"# FAILURE EXAMPLE #{ex['example_id']}")
+            print(f"# {ex['solver_type']} - {ex['config_name']}")
+            print(f"# n_sample={ex['n_sample']}, poly_id={ex['polygon_id']}")
+            print(f"# {'='*66}")
+            print()
+            
+            # Print vis array
+            print(f"vis_{ex['example_id']} = np.array([")
+            for v in ex['vis']:
+                print(f"    {list(v)},")
+            print("])")
+            print()
+            
+            # Print test point
+            print(f"test_point_{ex['example_id']} = np.array({list(ex['test_point'])})")
+            print()
+            
+            # Print test code
+            print(f"# Test this case:")
+            print(f"mu = {self.mu}")
+            print(f"poly_{ex['example_id']} = PolygonContactPatch(")
+            print(f"    vis=vis_{ex['example_id']},")
+            print(f"    mu=mu,")
+            print(f"    ker_precompute=False,")
+            print(f"    warmstart_strat=None,")
+            print(f"    solver_tyep='{ex['solver_type']}',")
+            print(f"    solver_kwargs={{'max_iterations': 5000, 'verbose': True}}")
+            print(f")")
+            print()
+            print(f"# Try to project (should fail or take many iterations):")
+            print(f"history_{ex['example_id']} = []")
+            print(f"result_{ex['example_id']} = poly_{ex['example_id']}.project_cone(")
+            print(f"    test_point_{ex['example_id']}, ")
+            print(f"    history=history_{ex['example_id']}")
+            print(f")")
+            print(f"print(f'Converged: {{len(history_{ex['example_id']}) < 5000}}, Iterations: {{len(history_{ex['example_id']})}}')")
+            print()
+            print()
+
+    def visualize_failure_geometry(self, examples: List[Dict], save_prefix: str = None):
+        """Visualize the 2D polygon geometries that caused failures"""
+        if len(examples) == 0:
+            print("No examples to visualize!")
+            return
+        
+        n_examples = len(examples)
+        n_cols = min(2, n_examples)
+        n_rows = (n_examples + n_cols - 1) // n_cols
+        
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(8 * n_cols, 6 * n_rows))
+        
+        # Handle single subplot case
+        if n_examples == 1:
+            axes = np.array([axes])
+        axes = axes.flatten()
+        
+        for idx, ex in enumerate(examples):
+            ax = axes[idx]
+            
+            vis = ex['vis']
+            test_point = ex['test_point']
+            
+            # Extract x, y coordinates (assuming vis is N x 2)
+            x_coords = vis[:, 0]
+            y_coords = vis[:, 1]
+            
+            # Plot polygon
+            # Close the polygon by adding first vertex at the end
+            x_poly = np.append(x_coords, x_coords[0])
+            y_poly = np.append(y_coords, y_coords[0])
+            
+            ax.fill(x_poly, y_poly, color='lightblue', alpha=0.3, label='Polygon')
+            ax.plot(x_poly, y_poly, 'b-', linewidth=2, label='Edges')
+            
+            # Plot vertices
+            ax.scatter(x_coords, y_coords, c='blue', marker='o', s=100, 
+                    zorder=5, label='Vertices')
+            
+            # Number the vertices
+            for i, (x, y) in enumerate(vis):
+                ax.annotate(f'{i}', (x, y), xytext=(5, 5), 
+                        textcoords='offset points', fontsize=9)
+            
+            # Plot centroid
+            centroid = vis.mean(axis=0)
+            ax.scatter(centroid[0], centroid[1], c='red', marker='x', 
+                    s=200, linewidths=3, zorder=6, label='Centroid')
+            
+            # Plot origin
+            ax.scatter(0, 0, c='black', marker='+', s=200, linewidths=3, 
+                    zorder=6, label='Origin')
+            
+            # Add title with info
+            ax.set_title(f"Failure #{ex['example_id']}: n={ex['n_sample']}, "
+                        f"poly_id={ex['polygon_id']}\n"
+                        f"{ex['solver_type']} - {ex['iterations']} iter\n"
+                        f"||f||={np.linalg.norm(test_point[:3]):.2f}, "
+                        f"||τ||={np.linalg.norm(test_point[3:]):.2f}",
+                        fontsize=10)
+            
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_aspect('equal', adjustable='box')
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=8, loc='best')
+            
+            # Set nice limits with some padding
+            x_range = x_coords.max() - x_coords.min()
+            y_range = y_coords.max() - y_coords.min()
+            padding = 0.2 * max(x_range, y_range)
+            
+            ax.set_xlim(x_coords.min() - padding, x_coords.max() + padding)
+            ax.set_ylim(y_coords.min() - padding, y_coords.max() + padding)
+        
+        # Hide unused subplots
+        for idx in range(n_examples, len(axes)):
+            axes[idx].axis('off')
+        
+        plt.tight_layout()
+        
+        if save_prefix:
+            filename = f'{save_prefix}_failure_geometries.png'
+            plt.savefig(filename, dpi=300, bbox_inches='tight')
+            print(f"✓ Saved: {filename}")
+        
+        plt.show()
+
+    def analyze_failure_geometry(self, examples: List[Dict]):
+        """Analyze geometric properties of failure-causing polygons"""
+        if len(examples) == 0:
+            print("No examples to analyze!")
+            return
+        
+        print("\n" + "="*70)
+        print("GEOMETRIC ANALYSIS OF FAILURE CASES")
+        print("="*70)
+        
+        for ex in examples:
+            vis = ex['vis']
+            test_point = ex['test_point']
+            
+            print(f"\n{'='*70}")
+            print(f"EXAMPLE #{ex['example_id']}")
+            print(f"{'='*70}")
+            
+            # Basic statistics
+            print(f"\nPolygon statistics:")
+            print(f"  Number of vertices: {len(vis)}")
+            print(f"  Centroid: {vis.mean(axis=0)}")
+            
+            # Edge lengths
+            edge_lengths = []
+            for i in range(len(vis)):
+                j = (i + 1) % len(vis)
+                edge_len = np.linalg.norm(vis[j] - vis[i])
+                edge_lengths.append(edge_len)
+            
+            print(f"\nEdge lengths:")
+            print(f"  Min: {np.min(edge_lengths):.6f}")
+            print(f"  Max: {np.max(edge_lengths):.6f}")
+            print(f"  Mean: {np.mean(edge_lengths):.6f}")
+            print(f"  Std: {np.std(edge_lengths):.6f}")
+            print(f"  Ratio (max/min): {np.max(edge_lengths) / (np.min(edge_lengths) + 1e-10):.2f}")
+            
+            # Check for degenerate edges
+            tiny_edges = sum(1 for e in edge_lengths if e < 1e-6)
+            if tiny_edges > 0:
+                print(f"  ⚠️  {tiny_edges} edges are very small (< 1e-6)")
+            
+            # Check for nearly collinear vertices
+            collinear_count = 0
+            for i in range(len(vis)):
+                v0 = vis[i]
+                v1 = vis[(i + 1) % len(vis)]
+                v2 = vis[(i + 2) % len(vis)]
+                
+                # Compute cross product
+                vec1 = v1 - v0
+                vec2 = v2 - v1
+                cross = np.cross(vec1, vec2)
+                
+                # If cross product is very small, vertices are nearly collinear
+                if np.linalg.norm(cross) < 1e-6:
+                    collinear_count += 1
+            
+            if collinear_count > 0:
+                print(f"  ⚠️  {collinear_count} sets of nearly collinear vertices detected")
+            
+            # Condition number analysis (if possible)
+            try:
+                # Compute covariance matrix of vertices
+                centered = vis - vis.mean(axis=0)
+                cov = centered.T @ centered
+                eigenvalues = np.linalg.eigvalsh(cov)
+                cond = eigenvalues.max() / (eigenvalues.min() + 1e-10)
+                
+                print(f"\nShape analysis:")
+                print(f"  Eigenvalues: {eigenvalues}")
+                print(f"  Condition number: {cond:.2f}")
+                
+                if cond > 100:
+                    print(f"  ⚠️  High condition number - polygon is very elongated/flat")
+            except:
+                pass
+            
+            # Test point analysis
+            print(f"\nTest point analysis:")
+            print(f"  Test point: {test_point}")
+            print(f"  Norm: {np.linalg.norm(test_point):.6f}")
+            print(f"  Force components: fx={test_point[0]:.3f}, fy={test_point[1]:.3f}, fz={test_point[2]:.3f}")
+            print(f"  Torque components: τx={test_point[3]:.3f}, τy={test_point[4]:.3f}, τz={test_point[5]:.3f}")
+            
+            force_norm = np.linalg.norm(test_point[:3])
+            torque_norm = np.linalg.norm(test_point[3:])
+            print(f"  Force norm: {force_norm:.6f}")
+            print(f"  Torque norm: {torque_norm:.6f}")
+            
+            if force_norm < 1e-6:
+                print(f"  ⚠️  Force is very small - near-zero force case")
+            if torque_norm < 1e-6:
+                print(f"  ⚠️  Torque is very small - near-zero torque case")
+
+    # Update generate_full_report to include failure examples
+    def generate_full_report(self, df: pd.DataFrame = None, save_prefix: str = 'benchmark'):
+        """Generate complete analysis report with all visualizations and failure examples"""
+        if df is None:
+            df = self.get_results_dataframe()
+        
+        print("\n" + "="*70)
+        print("GENERATING COMPLETE BENCHMARK REPORT")
+        print("="*70)
+        
+        # 1. Solution quality analysis
+        print("\n[1/8] Analyzing solution quality...")
+        self.analyze_solution_quality(df)
+        
+        # 2. Performance by configuration
+        print("\n[2/8] Analyzing performance by configuration...")
+        grouped = self.analyze_by_config(df)
+        
+        # 3. Top configurations
+        print("\n[3/8] Identifying top configurations...")
+        self.print_top_configurations(df, top_n=3)
+        
+        # 4. Failure diagnosis
+        print("\n[4/8] Diagnosing failures...")
+        failed = self.diagnose_failures(df)
+        
+        # 5. Extract failure examples
+        if failed is not None and len(failed) > 0:
+            print("\n[5/8] Extracting failure examples...")
+            examples = self.extract_failure_examples(df, n_examples=4)
+            
+            if len(examples) > 0:
+                # Save examples
+                self.save_failure_examples(examples, filename=f'{save_prefix}_failure_examples.npz')
+                
+                # Print reproduction code
+                self.print_failure_examples_code(examples)
+                
+                # Analyze geometry
+                self.analyze_failure_geometry(examples)
+                
+                # Visualize geometries
+                self.visualize_failure_geometry(examples, save_prefix=save_prefix)
+        else:
+            print("\n[5/8] No failures to analyze - skipping failure examples")
+            examples = []
+        
+        # 6. Generate comparison plots
+        print("\n[6/8] Generating comparison plots...")
+        self.plot_config_comparison(df, save_prefix=save_prefix)
+        
+        # 7. Generate hyperparameter plots
+        print("\n[7/8] Generating hyperparameter effect plots...")
+        self.plot_hyperparameter_effects(df, save_prefix=save_prefix)
+        
+        # 8. Generate failure plots
+        if failed is not None and len(failed) > 0:
+            print("\n[8/8] Generating failure analysis plots...")
+            self.plot_failure_analysis(df, save_prefix=save_prefix)
+        else:
+            print("\n[8/8] Skipping failure plots (no failures)")
+        
+        # Save CSV
+        csv_filename = f'{save_prefix}_results.csv'
+        df.to_csv(csv_filename, index=False)
+        print(f"\n✓ Results saved to: {csv_filename}")
+        
+        print("\n" + "="*70)
+        print("REPORT GENERATION COMPLETE!")
+        print("="*70)
+        
+        return examples
+
+# ====================================================================================
+# USAGE EXAMPLES
+# ====================================================================================
+
+def run_quick_test():
+    """Quick test (~2-3 minutes)"""
+    print("Running quick test...")
+    benchmark = OptimizationBenchmark(mu=2.0, n_test_points=5)
+    benchmark.generate_test_problems([3, 5], n_polygons_per_size=2)
+    benchmark.run_benchmark_suite(
+        pgd_modes=['baseline'],
+        admm_modes=['baseline']
+    )
+    df = benchmark.get_results_dataframe()
+    benchmark.generate_full_report(df, save_prefix='quick_test')
+    return benchmark, df
+
+def run_standard_benchmark():
+    """Standard hyperparameter benchmark (~20-30 minutes)"""
     benchmark = OptimizationBenchmark(mu=2.0, n_test_points=20)
+    benchmark.generate_test_problems([3, 5, 10], n_polygons_per_size=5)
     
-    # Generate test problems
-    benchmark.generate_test_problems(
-        n_samples_list=[3, 5, 10],
-        n_polygons_per_size=5
+    benchmark.run_benchmark_suite(
+        pgd_modes=['baseline', 'alpha_sweep', 'feature_combinations'],
+        admm_modes=['baseline', 'rho_init_sweep', 'alpha_sweep', 'momentum_sweep']
     )
     
-    # Run benchmark (use 'minimal', 'default', or 'extensive')
-    benchmark.run_benchmark(
-        solver_types=['PGD', 'ADMM'],
-        grid_level='default'  # Start with 'default', then try 'extensive'
-    )
-    
-    # Analyze results
-    df = benchmark.analyze_results()
-    
-    # Save results
-    df.to_csv('benchmark_results.csv', index=False)
-    print("\nResults saved to: benchmark_results.csv")
-    
-    # Generate plots
-    benchmark.plot_results(df, save_path='benchmark_plots.png')
+    df = benchmark.get_results_dataframe()
+    benchmark.generate_full_report(df, save_prefix='standard')
     
     return benchmark, df
 
-# Run it!
+def run_extensive_benchmark():
+    """Extensive hyperparameter sweep (~2-4 hours)"""
+    benchmark = OptimizationBenchmark(mu=2.0, n_test_points=30)
+    benchmark.generate_test_problems([3, 5, 10, 15], n_polygons_per_size=8)
+    
+    benchmark.run_benchmark_suite(
+        pgd_modes=[
+            'baseline', 
+            'alpha_sweep', 
+            'armijo_sigma_sweep', 
+            'armijo_beta_sweep',
+            'feature_combinations'
+        ],
+        admm_modes=[
+            'baseline', 
+            'rho_init_sweep', 
+            'alpha_sweep', 
+            'momentum_sweep',
+            'rho_factor_sweep',
+            'osqp_fraction_sweep',
+            'combined_best'
+        ]
+    )
+    
+    df = benchmark.get_results_dataframe()
+    benchmark.generate_full_report(df, save_prefix='extensive')
+    
+    return benchmark, df
+
+# ====================================================================================
+# RUN IT
+# ====================================================================================
+
 if __name__ == '__main__':
-    benchmark, results_df = run_complete_benchmark()
+    # Choose one:
+    
+    # 1. Quick test (2-3 minutes) - to verify everything works
+    # benchmark, df = run_quick_test()
+    
+    # 2. Standard benchmark (20-30 minutes) - good balance
+    benchmark, df = run_standard_benchmark()
+    
+    # 3. Extensive benchmark (2-4 hours) - comprehensive analysis
+    # benchmark, df = run_extensive_benchmark()
+    
+    print("\n" + "="*70)
+    print("BENCHMARK COMPLETE!")
+    print("="*70)
+    print("Generated files:")
+    print("  - extensive_results.csv (all raw data)")
+    print("  - extensive_PGD_configs.png")
+    print("  - extensive_ADMM_configs.png")
+    print("  - extensive_PGD_hyperparams.png")
+    print("  - extensive_ADMM_hyperparams.png")
+    print("  - extensive_failure_analysis.png")
+    print("="*70)
