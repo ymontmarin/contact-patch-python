@@ -1,1 +1,1 @@
-from contactpatch.patches.polygon import PolygonContactPatch
+from contactpatch.patches.polygon import PolygonContactPatch as PolygonContactPatch

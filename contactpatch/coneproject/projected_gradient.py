@@ -1,31 +1,32 @@
 import numpy as np
 
 
-class ProjectedGradient():
+class ProjectedGradient:
     """
     Projected Gradient solver with optional FISTA acceleration,
     preconditioning, and adaptive restart.
     """
+
     def __init__(
-            self,
-            patch,
-            alpha=.999,
-            accel=True,
-            precond=True,
-            adaptive_restart=True,
-            armijo=True,
-            armijo_iter=20,
-            armijo_sigma=.1,
-            armijo_beta=.5,
-            armijo_force_restart=.8,
-            rel_crit=1e-6,
-            abs_crit=1e-8,
-            rel_obj_crit=1e-6,
-            abs_obj_crit=1e-12,
-            optim_crit=1e-12,
-            max_iterations=1000,
-            verbose=False,
-        ):
+        self,
+        patch,
+        alpha=0.999,
+        accel=True,
+        precond=True,
+        adaptive_restart=True,
+        armijo=True,
+        armijo_iter=20,
+        armijo_sigma=0.1,
+        armijo_beta=0.5,
+        armijo_force_restart=0.8,
+        rel_crit=1e-6,
+        abs_crit=1e-8,
+        rel_obj_crit=1e-6,
+        abs_obj_crit=1e-12,
+        optim_crit=1e-12,
+        max_iterations=1000,
+        verbose=False,
+    ):
         self.patch = patch
 
         self.max_iterations = max_iterations
@@ -57,11 +58,11 @@ class ProjectedGradient():
     def solve(self, l, x_0=None, y_0=None, t_0=None, history=None, **kwargs):
         """
         Solve: min_{x in C} (1/2)||Ax - l||^2
-        
+
         Args:
             l: Target vector
             x_0: Initial point (optional, defaults to zero)
-        
+
         Returns:
             x: Solution
             converged: True if converged, False if max_iter reached
@@ -75,7 +76,7 @@ class ProjectedGradient():
 
         residual = np.zeros(self.patch.n)
 
-        t_k = 1. if t_0 is None else t_0
+        t_k = 1.0 if t_0 is None else t_0
         if self.accel:
             # Momentum point variable
             y_k = x_k.copy() if y_0 is None else y_0.copy()
@@ -127,20 +128,26 @@ class ProjectedGradient():
                     x_kp1[...] = -alpha * d_k
                     x_kp1 += y_k
                     self.patch.project_hidden_cone_(x_kp1)
-                    
+
                     # Direction
                     np.subtract(x_kp1, y_k, out=dx_trial)
-                    
+
                     # New residual and objective
                     self.patch.apply_A(x_kp1, _out=residual_trial)
                     residual_trial -= l
                     obj_trial = 0.5 * np.dot(residual_trial, residual_trial)
-                    
+
                     # Armijo condition
                     if self.accel:
-                        armijo_crit = obj_trial <= obj_k + np.dot(g_k.flatten(), dx_trial.flatten()) + (1/(2*alpha)) * np.dot(dx_trial.flatten(), dx_trial.flatten())
+                        armijo_crit = obj_trial <= obj_k + np.dot(
+                            g_k.flatten(), dx_trial.flatten()
+                        ) + (1 / (2 * alpha)) * np.dot(
+                            dx_trial.flatten(), dx_trial.flatten()
+                        )
                     else:
-                        armijo_crit = obj_trial <= obj_k + self.armijo_sigma * np.dot(g_k.flatten(), dx_trial.flatten())
+                        armijo_crit = obj_trial <= obj_k + self.armijo_sigma * np.dot(
+                            g_k.flatten(), dx_trial.flatten()
+                        )
                     if armijo_crit:
                         success = True
                         break
@@ -159,48 +166,87 @@ class ProjectedGradient():
 
             # Compute the stats
             np.subtract(x_kp1, x_k, out=dx_k)
-            dx_k_norm = np.linalg.norm(dx_k)  # It correspond to \|P(x_k + a grad) - x_k\| 
+            dx_k_norm = np.linalg.norm(
+                dx_k
+            )  # It correspond to \|P(x_k + a grad) - x_k\|
             x_k_norm = np.linalg.norm(x_k)
 
             abs_change = dx_k_norm
-            rel_change =  abs_change / (x_k_norm + 1e-10)
-            rel_obj_change = np.abs(obj_k - obj_km1) / (max(obj_k, obj_km1) + 1e-10) if obj_km1 is not None else 1.
+            rel_change = abs_change / (x_k_norm + 1e-10)
+            rel_obj_change = (
+                np.abs(obj_k - obj_km1) / (max(obj_k, obj_km1) + 1e-10)
+                if obj_km1 is not None
+                else 1.0
+            )
 
             # TODO: Optimize
-            optim_crit_value = .5 * np.linalg.norm(
-                self.patch.apply_A(
-                    self.patch.project_hidden_cone(x_kp1 - self.patch.apply_A_pinv(self.patch.apply_A(x_kp1) - l))
-                    - x_kp1
+            optim_crit_value = (
+                0.5
+                * np.linalg.norm(
+                    self.patch.apply_A(
+                        self.patch.project_hidden_cone(
+                            x_kp1
+                            - self.patch.apply_A_pinv(self.patch.apply_A(x_kp1) - l)
+                        )
+                        - x_kp1
+                    )
                 )
-            )**2
+                ** 2
+            )
 
             # Check convergence
-            change = (abs_change < self.abs_crit or rel_change < self.rel_crit) and rel_obj_change < self.rel_obj_crit
+            change = (
+                abs_change < self.abs_crit or rel_change < self.rel_crit
+            ) and rel_obj_change < self.rel_obj_crit
             obj_val = obj_k < self.abs_obj_crit
             optim_test = optim_crit_value < self.optim_crit
 
             # Log stat
             if self.verbose:
-                self._print_iteration(k, obj_k, dx_k_norm, rel_change, optim_crit_value, t_k, alpha, arm_i)
+                self._print_iteration(
+                    k, obj_k, dx_k_norm, rel_change, optim_crit_value, t_k, alpha, arm_i
+                )
             if history is not None:
-                history.append((k, obj_k, dx_k_norm, rel_change, optim_crit_value, t_k, alpha, arm_i))
+                history.append(
+                    (
+                        k,
+                        obj_k,
+                        dx_k_norm,
+                        rel_change,
+                        optim_crit_value,
+                        t_k,
+                        alpha,
+                        arm_i,
+                    )
+                )
 
             final_crit = change or obj_val or optim_test
 
             if final_crit:
                 if self.verbose:
-                    print(f"\nConverged in {k+1} iterations! Change:{change} | Obj val:{obj_val} | Optim crit:{optim_test}")
-                return x_kp1, True, {'x_0': x_kp1, 'y_0': y_k, 't_0': t_k}
+                    print(
+                        f"\nConverged in {k + 1} iterations! Change:{change} | Obj val:{obj_val} | Optim crit:{optim_test}"
+                    )
+                return x_kp1, True, {"x_0": x_kp1, "y_0": y_k, "t_0": t_k}
 
             # Prepare variable for next iterate
             if self.accel:
-                if k > 0 and (force_restart or (self.adaptive_restart and (np.dot(dx_k.flatten(), dx_km1.flatten()) < 0 or obj_k > obj_km1))):
+                if k > 0 and (
+                    force_restart
+                    or (
+                        self.adaptive_restart
+                        and (
+                            np.dot(dx_k.flatten(), dx_km1.flatten()) < 0
+                            or obj_k > obj_km1
+                        )
+                    )
+                ):
                     # Restart moment
-                    t_kp1 = 1.
+                    t_kp1 = 1.0
                     y_k[...] = x_kp1
                 else:
                     # Update momentum point
-                    t_kp1 = (1 + np.sqrt(1 + 4*t_k**2)) / 2
+                    t_kp1 = (1 + np.sqrt(1 + 4 * t_k**2)) / 2
                     y_k[...] = dx_k
                     y_k *= (t_k - 1) / t_kp1
                     y_k += x_kp1
@@ -217,7 +263,7 @@ class ProjectedGradient():
 
         if self.verbose:
             print(f"\nMaximum iterations ({self.max_iterations}) reached")
-        return x_k, False, {'x_0': x_k, 'y_0': y_k, 't_0': t_k}
+        return x_k, False, {"x_0": x_k, "y_0": y_k, "t_0": t_k}
 
     def _print_header(self):
         """Print header for verbose output"""
@@ -233,18 +279,26 @@ class ProjectedGradient():
         if self.adaptive_restart:
             mode.append("Restart")
         if self.armijo:
-            mode.append(f"Armijo(N={self.armijo_iter}, s={self.armijo_sigma}, b={self.armijo_beta})")
+            mode.append(
+                f"Armijo(N={self.armijo_iter}, s={self.armijo_sigma}, b={self.armijo_beta})"
+            )
 
         print("=" * 70)
         print(f"Projected Gradient Solver: {' + '.join(mode)}")
-        print(f"Max iterations: {self.max_iterations}, R-Tolerance: {self.rel_crit:.1e}")
+        print(
+            f"Max iterations: {self.max_iterations}, R-Tolerance: {self.rel_crit:.1e}"
+        )
         print(f"Objective R-Tolerance: {self.rel_obj_crit:.1e}")
 
         print("=" * 70)
-        print(f"{'Iter':>6} {'Objective':>12} {'||dx||':>12} {'Rel Change':>12} {'Optim Crit':>12} {'t_k':>8} {'a':>8} {'a_iter':>6}")
+        print(
+            f"{'Iter':>6} {'Objective':>12} {'||dx||':>12} {'Rel Change':>12} {'Optim Crit':>12} {'t_k':>8} {'a':>8} {'a_iter':>6}"
+        )
         print("-" * 70)
 
-    def _print_iteration(self, k, obj, dx_norm, rel_change, optim_crit_value, t_k, alpha, arm_i):
+    def _print_iteration(
+        self, k, obj, dx_norm, rel_change, optim_crit_value, t_k, alpha, arm_i
+    ):
         """Print iteration information"""
         # Print every iteration for first 10, then every 10, then every 100
         if k < 10 or k % 10 == 0:

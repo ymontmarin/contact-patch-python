@@ -3,17 +3,19 @@ import scipy as sc
 
 from contactpatch.coneproject import ProjectedGradient, ADMM
 
-SOLVERS = {
-    "PGD": ProjectedGradient,
-    "ADMM": ADMM
-}
+SOLVERS = {"PGD": ProjectedGradient, "ADMM": ADMM}
+
+
 class PolygonContactPatch:
-    def __init__(self,
-            vis, mu,
-            ker_precompute=False,
-            warmstart_strat=None,
-            solver_tyep='PGD',
-            solver_kwargs=None):
+    def __init__(
+        self,
+        vis,
+        mu,
+        ker_precompute=False,
+        warmstart_strat=None,
+        solver_tyep="PGD",
+        solver_kwargs=None,
+    ):
         """
         vis (nx2): the n vertices of a convex polygon P centered in its barycenter and align with principle axis
             Without loss of generality:
@@ -39,7 +41,7 @@ class PolygonContactPatch:
              [ I3  ...  I3 ]] (6x3N)
         Bi = [[     02       vi^perp ]
               [ -vi^perp^T     01    ]] (3x3)
-    
+
         Because the vi are centered: Sum_i Bi = 03
 
         We note wi = vi^perp and mwi = -wi^perp
@@ -63,7 +65,9 @@ class PolygonContactPatch:
 
         self._force_cone_precompute()
 
-        self.solver = SOLVERS[solver_tyep](self, **(solver_kwargs if solver_kwargs is not None else {}))
+        self.solver = SOLVERS[solver_tyep](
+            self, **(solver_kwargs if solver_kwargs is not None else {})
+        )
 
         self.reset_currents()
         # Optional precompute
@@ -91,7 +95,13 @@ class PolygonContactPatch:
                 # Choose aimed_n of the n vertices
                 # We balance as much as possible and use randomness if unknown
                 eq = np.array([aimed_n // n] * aimed_n, dtype=np.int32)
-                eq[np.random.choice(np.arange(aimed_n, dtype=np.int32), size=(aimed_n % n), replace=False)] += 1
+                eq[
+                    np.random.choice(
+                        np.arange(aimed_n, dtype=np.int32),
+                        size=(aimed_n % n),
+                        replace=False,
+                    )
+                ] += 1
                 assert np.sum(eq) == aimed_n
                 query = np.cumsum(eq)
                 query[-1] = 0
@@ -101,21 +111,23 @@ class PolygonContactPatch:
 
     @staticmethod
     def test_polygon_vis(vis):
-        return np.all(np.isclose(np.sum(vis, axis=0), 0)) and np.isclose(np.sum(vis[:,0] * vis[:,1]), 0)
+        return np.all(np.isclose(np.sum(vis, axis=0), 0)) and np.isclose(
+            np.sum(vis[:, 0] * vis[:, 1]), 0
+        )
 
     @staticmethod
     def process_polygon(vis):
         # Center the vis:
-        t = - vis.sum(axis=0, keepdims=True) / vis.shape[0]
+        t = -vis.sum(axis=0, keepdims=True) / vis.shape[0]
         vis += t
 
         # Find the principle axis:
         # The matrix M = Sum_i vi viT = [[ a c ]
         #                                [ c b ]]
-        a,b = np.sum(vis * vis, axis=0)  # Sum xi^2, Sum yi^2
-        c = np.sum(vis[:,0] * vis[:,1])  # Sum xiyi
+        a, b = np.sum(vis * vis, axis=0)  # Sum xi^2, Sum yi^2
+        c = np.sum(vis[:, 0] * vis[:, 1])  # Sum xiyi
 
-        if np.isclose(c, 0.):
+        if np.isclose(c, 0.0):
             return vis, np.eye(2), t
 
         # Let us find P ortho s.t.
@@ -127,10 +139,10 @@ class PolygonContactPatch:
         #                 [ c b ]]
         # are:
         # λ₁,₂ = (a + b ± √((a - b)² + 4c²))/2
-        det = np.sqrt((a-b)**2 + 4*c**2)
+        det = np.sqrt((a - b) ** 2 + 4 * c**2)
 
-        ev1 = .5 * (a + b - det)
-        ev2 = .5 * (a + b + det)
+        ev1 = 0.5 * (a + b - det)
+        ev2 = 0.5 * (a + b + det)
         # ev1 <= ev2
         # with eigenvector v₁,₂ = [1, (λ₁,₂ - a)/c]
         # And u1 u2 the normalized vector
@@ -144,35 +156,35 @@ class PolygonContactPatch:
         N1 = np.sqrt(1 + fact1**2)
         N2 = np.sqrt(1 + fact2**2)
 
-        s = -1. if c < 0 else 1.
+        s = -1.0 if c < 0 else 1.0
 
-        P = np.array([[1 / N1, fact1 / N1],
-                      [s / N2, s * fact2 / N2]])
+        P = np.array([[1 / N1, fact1 / N1], [s / N2, s * fact2 / N2]])
 
-        new_vis = np.einsum('ni,ji->nj',vis,P)
+        new_vis = np.einsum("ni,ji->nj", vis, P)
 
         # vis' = P(vis + t) = Pvis + Pt
         # So the relative placement of the new frame w.r.t the old one is:
         # new^M_old = [[ P 0 Pt ]
         #              [ 0 1 0  ]
-        #              [ 0 0 1  ]                      
+        #              [ 0 0 1  ]
         # NOTE: the relative placement must be included in the contact jacobian
-        return np.einsum('ni,ji->nj',vis,P), P, t
+        return np.einsum("ni,ji->nj", vis, P), P, t
 
     def _force_cone_precompute(self):
         # In the code we use wi = vi^perp and mwi = -vi^perp
         self.wis = np.stack(
-            (self.vis[:,1], -self.vis[:,0]),
-            axis=1
+            (self.vis[:, 1], -self.vis[:, 0]), axis=1
         )  # wi = vi^perp = [a,b]^perp = [-b,a]
         self.mwis = -self.wis  # Could be unstored if needed
 
         # Moment of the polygon
-        self.mx, self.my = np.sum(self.wis * self.wis, axis=0) # Sum xi^2, Sum yi^2
+        self.mx, self.my = np.sum(self.wis * self.wis, axis=0)  # Sum xi^2, Sum yi^2
         # mxy = Sum xiyi is 0 ! Because of hypothesis
 
         # It is AAT and also the non null spectrum of ATA
-        self.aat = np.array([self.mx, self.my, self.mx + self.my, self.N, self.N, self.N])
+        self.aat = np.array(
+            [self.mx, self.my, self.mx + self.my, self.N, self.N, self.N]
+        )
         self.aat_inv = 1 / self.aat
         self.aat_inv_sq = self.aat_inv**2
 
@@ -183,13 +195,14 @@ class PolygonContactPatch:
     """
     Dense linear algebra API
     """
+
     def get_A(self):
         # Block construction
         res = np.zeros((6, 3 * self.N))
         for i in range(self.N):
-            res[:2, 3*i+2] = self.wis[i]
-            res[2, 3*i:3*i+2] = self.mwis[i]
-            res[3:, 3*i:3*i+3] = np.eye(3)
+            res[:2, 3 * i + 2] = self.wis[i]
+            res[2, 3 * i : 3 * i + 2] = self.mwis[i]
+            res[3:, 3 * i : 3 * i + 3] = np.eye(3)
         return res
 
     def get_AT(self):
@@ -213,7 +226,7 @@ class PolygonContactPatch:
         - is centered: Sum_i Bi = 0
         - principal alligned: Sum_i xiyi = 0
 
-        So      
+        So
         AAT = [[ C   0  ]
                [ 0  nId ]]
         C = [[ mx  0   0     ]
@@ -253,12 +266,14 @@ class PolygonContactPatch:
         res = np.zeros((3 * self.N, 3 * self.N))
 
         # Add upper left part
-        res.reshape(self.N, 3, self.N, 3)[:,:2,:,:2] = (
-            np.einsum('ia,jb->iajb', self.wis, self.wis)
+        res.reshape(self.N, 3, self.N, 3)[:, :2, :, :2] = (
+            np.einsum("ia,jb->iajb", self.wis, self.wis)
             + np.eye(2)[np.newaxis, :, np.newaxis, :]
         )
         # Add scalar part
-        res.reshape(self.N, 3, self.N, 3)[:,2,:,2] = np.einsum('ia,ja->ij', self.wis, self.wis) + 1.
+        res.reshape(self.N, 3, self.N, 3)[:, 2, :, 2] = (
+            np.einsum("ia,ja->ij", self.wis, self.wis) + 1.0
+        )
         return res
 
     def get_ATA_pinv(self):
@@ -289,12 +304,14 @@ class PolygonContactPatch:
         diag = self.aat_inv_sq
 
         # Add upper left part
-        res.reshape(self.N, 3, self.N, 3)[:,:2,:,:2] = (
-            np.einsum('ia,jb->iajb', self.wis, diag[2] * self.wis)
+        res.reshape(self.N, 3, self.N, 3)[:, :2, :, :2] = (
+            np.einsum("ia,jb->iajb", self.wis, diag[2] * self.wis)
             + np.diag(diag[3:5])[np.newaxis, :, np.newaxis, :]
         )
         # Add scalar part
-        res.reshape(self.N, 3, self.N, 3)[:,2,:,2] = np.einsum('ia,ja->ij', self.wis,  diag[np.newaxis, :2] * self.wis) + diag[5]
+        res.reshape(self.N, 3, self.N, 3)[:, 2, :, 2] = (
+            np.einsum("ia,ja->ij", self.wis, diag[np.newaxis, :2] * self.wis) + diag[5]
+        )
         return res
 
     def get_ATA_reg_inv(self, rho):
@@ -316,16 +333,18 @@ class PolygonContactPatch:
         """
         res = np.zeros((3 * self.N, 3 * self.N))
 
-        rho_inv = 1. / rho
+        rho_inv = 1.0 / rho
         diag = -rho_inv / (self.aat + rho)
 
         # Add upper left part
-        res.reshape(self.N, 3, self.N, 3)[:,:2,:,:2] = (
-            np.einsum('ia,jb->iajb', self.wis, diag[2] * self.wis)
+        res.reshape(self.N, 3, self.N, 3)[:, :2, :, :2] = (
+            np.einsum("ia,jb->iajb", self.wis, diag[2] * self.wis)
             + np.diag(diag[3:5])[np.newaxis, :, np.newaxis, :]
         )
         # Add scalar part
-        res.reshape(self.N, 3, self.N, 3)[:,2,:,2] = np.einsum('ia,ja->ij', self.wis,  diag[np.newaxis, :2] * self.wis) + diag[5]
+        res.reshape(self.N, 3, self.N, 3)[:, 2, :, 2] = (
+            np.einsum("ia,ja->ij", self.wis, diag[np.newaxis, :2] * self.wis) + diag[5]
+        )
         # Add identity term
         res += rho_inv * np.eye(3 * self.N)
         return res
@@ -333,6 +352,7 @@ class PolygonContactPatch:
     """
     Sparse linear algebra API
     """
+
     def apply_A(self, fis, _out=None):
         """
         fis: (nx3)
@@ -349,8 +369,8 @@ class PolygonContactPatch:
         if _out is None:
             _out = np.zeros(6)
 
-        _out[:2] = np.sum(self.wis * fis[:,2][:, np.newaxis], axis=0)
-        _out[2] = np.sum(self.mwis * fis[:,:2])
+        _out[:2] = np.sum(self.wis * fis[:, 2][:, np.newaxis], axis=0)
+        _out[2] = np.sum(self.mwis * fis[:, :2])
         _out[3:] = np.sum(fis, axis=0)
         return _out
 
@@ -406,14 +426,14 @@ class PolygonContactPatch:
         """
         (rI + ATA)^ F = 1/r (F + AT diag(-1/(r + d)) A F)
         """
-        diag = (-1.) / (self.aat + rho)
+        diag = (-1.0) / (self.aat + rho)
         _out = self.apply_AT(diag * self.apply_A(fis), _out=_out)
         _out += fis
         _out /= rho
         return _out
 
     def apply_ATA_reg_inv_(self, fis, rho):
-        diag = (-1.) / (self.aat + rho)
+        diag = (-1.0) / (self.aat + rho)
         fis += self.apply_AT(diag * self.apply_A(fis))
         fis /= rho
         return fis
@@ -421,14 +441,15 @@ class PolygonContactPatch:
     """
     Precompute about the Kernel of A
     """
+
     def _compute_kerA(self, orthogonalize=False):
         """
         Direct Geometric Construction of null space basis V of A
-        
+
         Constructs the basis by exploiting the geometric meaning:
         1. Internal xy-modes
         2. Internal z-modes
-            
+
         Construct:
             V: (3N)x(3N-6) basis matrix for Ker(A)
             -> A V = 0 of size 6 x (3N-6)
@@ -436,7 +457,7 @@ class PolygonContactPatch:
         # Type 1: XY-MODES (2N-3 vectors typically)
         xy_modes = self._construct_xy_modes().T  # 3N x 2N-3
 
-        # Type 2: Z-MODES (n-3 vectors typically) 
+        # Type 2: Z-MODES (n-3 vectors typically)
         z_modes = self._construct_z_modes().T  # 3N x N-3
 
         # Stack all vectors
@@ -444,8 +465,8 @@ class PolygonContactPatch:
 
         if orthogonalize:
             # Orthogonalize using QR decomposition
-            Q, R = np.linalg.qr(V_matrix, mode='reduced')
-            
+            Q, R = np.linalg.qr(V_matrix, mode="reduced")
+
             # Keep only linearly independent columns
             rank = np.sum(np.abs(np.diag(R)) > 1e-12)
             assert rank == (3 * self.N - 6)
@@ -456,96 +477,104 @@ class PolygonContactPatch:
     def _construct_xy_modes(self):
         """
         Construct internal xy-deformation modes
-        
+
         Null vector of form (a1,b1,0,...,aN,bN,0)
 
         These represent motions in the xy-plane that preserve:
         1. Centroid: Σaᵢ = 0, Σbᵢ = 0
         2. Shape constraint: Σ(xᵢaᵢ + yᵢbᵢ) = 0
-        
+
         Method: Find null space of the 3×2N constraint matrix
         """
         # Build constraint matrix for (a₁,b₁,a₂,b₂,...,aₙ,bₙ)
-        C_xy = np.zeros((3, 2*self.N))
+        C_xy = np.zeros((3, 2 * self.N))
 
         # Row 0: Σaᵢ = 0 (sum of x-displacements = 0)
         C_xy[0, 0::2] = 1  # Coefficients of a₁, a₂, ..., aₙ
-        # Row 1: Σbᵢ = 0 (sum of y-displacements = 0)  
-        C_xy[1, 1::2] = 1  # Coefficients of b₁, b₂, ..., bₙ    
+        # Row 1: Σbᵢ = 0 (sum of y-displacements = 0)
+        C_xy[1, 1::2] = 1  # Coefficients of b₁, b₂, ..., bₙ
         # Row 2: Σ(xᵢaᵢ + yᵢbᵢ) = 0 (orthogonal to polygon shape)
-        C_xy[2, :] = self.wis.reshape(2*self.N)
+        C_xy[2, :] = self.wis.reshape(2 * self.N)
 
         # Find null space of C_xy of size 3x2N
         _, s, Vt = sc.linalg.svd(C_xy, full_matrices=True, compute_uv=True)
         # The rank should be 3
         assert len(s) == 3
-        assert np.all(~np.isclose(s, 0.))
-        
+        assert np.all(~np.isclose(s, 0.0))
+
         # Extract null space vectors (should be 2N-3 of them)
         xy_null = Vt[3:, :]  # (2N-3) × 2N
-        
+
         # Convert to full 3N-dimensional vectors
-        xy_modes  = np.concatenate(
-            (xy_null.reshape(2*self.N-3, self.N, 2), np.zeros((2*self.N-3, self.N, 1))),
-            axis=2
-        ).reshape(2*self.N-3, 3*self.N)
+        xy_modes = np.concatenate(
+            (
+                xy_null.reshape(2 * self.N - 3, self.N, 2),
+                np.zeros((2 * self.N - 3, self.N, 1)),
+            ),
+            axis=2,
+        ).reshape(2 * self.N - 3, 3 * self.N)
 
         return xy_modes
 
     def _construct_z_modes(self):
         """
         Construct z-deformation modes (bending/twisting)
-        
+
         These represent motions in z-direction that preserve:
         1. Net displacement: Σcᵢ = 0
-        2. Moment about y-axis: Σxᵢcᵢ = 0  
+        2. Moment about y-axis: Σxᵢcᵢ = 0
         3. Moment about x-axis: Σyᵢcᵢ = 0
-        
+
         Method: Find null space of the 3×n constraint matrix
         """
         if self.N == 3:
-            return np.zeros((0, 3*self.N))  # Need at least 4 vertices for non-trivial z-deformations
+            return np.zeros(
+                (0, 3 * self.N)
+            )  # Need at least 4 vertices for non-trivial z-deformations
 
         # Build constraint matrix for (c₁, c₂, ..., cₙ)
         C_z = np.concatenate((self.wis, np.ones((self.N, 1))), axis=1).T  # 3 x n
-        
+
         # Find null space of 3N
         _, s, Vt = sc.linalg.svd(C_z, full_matrices=True, compute_uv=True)
         # The rank should be 3
         assert len(s) == 3
-        assert np.all(~np.isclose(s, 0.))
-        
+        assert np.all(~np.isclose(s, 0.0))
+
         # Extract null space vectors (should be n-3 of them)
         z_null = Vt[3:, :]  # (n-3) × n
-        
+
         # Convert to full 3N-dimensional vectors
-        z_modes  = np.concatenate(
-            (np.zeros((self.N-3, self.N, 2)), z_null.reshape(self.N-3, self.N, 1)),
-            axis=2
-        ).reshape(self.N-3, 3*self.N)
-        
+        z_modes = np.concatenate(
+            (np.zeros((self.N - 3, self.N, 2)), z_null.reshape(self.N - 3, self.N, 1)),
+            axis=2,
+        ).reshape(self.N - 3, 3 * self.N)
+
         return z_modes
 
     def _compute_pker(self):
         kerA = self._compute_kerA()  # 3N x 3N-6
         self.pkers = {}
         for i in range(self.N):
-            U, s, _ = sc.linalg.svd(kerA[3*i:3*i+3], full_matrices=False, compute_uv=True)
+            U, s, _ = sc.linalg.svd(
+                kerA[3 * i : 3 * i + 3], full_matrices=False, compute_uv=True
+            )
             assert len(s) == 3
-            rank = sum(~np.isclose(s, 0.))
+            rank = sum(~np.isclose(s, 0.0))
             if rank == 3:
                 # Whole space, can not help to discrimine solution
                 continue
-            self.pkers[i] = U[:,:rank]  # A basis of the proj Kernel
+            self.pkers[i] = U[:, :rank]  # A basis of the proj Kernel
 
     """
     Cone belongings
     """
+
     def is_inside_hidden_cone(self, fis):
         """
         Check if F is in K_mu^n
         """
-        norms = np.linalg.norm(fis[:,:2], axis=1)
+        norms = np.linalg.norm(fis[:, :2], axis=1)
         muzs = self.mu * fis[:, 2]
         return np.all(np.logical_or(norms <= muzs, np.isclose(norms, muzs)))
 
@@ -573,7 +602,7 @@ class PolygonContactPatch:
             return False
         if do_solve:
             # We are not sure we need to project to verify
-            return np.all(np.isclose(self.project_cone(l),l))
+            return np.all(np.isclose(self.project_cone(l), l))
         return None
 
     def reject_nc_ker(self, fis):
@@ -583,10 +612,10 @@ class PolygonContactPatch:
         """
         for i, U in self.pkers.items():
             rank = U.shape[1]
-            p = fis[3*i:3*i+3]
+            p = fis[3 * i : 3 * i + 3]
             if rank == 0:
                 # it is a point, if outside, reject
-                if p[2] < 0 or ((p[0]**2 + p[1]**2) > (self.mu**2 * p[2]**2)):
+                if p[2] < 0 or ((p[0] ** 2 + p[1] ** 2) > (self.mu**2 * p[2] ** 2)):
                     return True
                 continue
             if rank == 1:
@@ -596,10 +625,10 @@ class PolygonContactPatch:
                 #    (px + tux)^2 + (py + tuy)^2 = mu^2 (pz + tuz)^2
                 #    pz + tuz >= 0
                 u = U[:, 0]
-                A = u[0]**2 + u[1]**2 - self.mu**2 * u[2]**2
-                half_B = u[0]*p[0] + u[1]*p[1] - self.mu**2 * u[2]*p[2]
-                C = p[0]**2 + p[1]**2 - self.mu**2 * p[2]**2
-                # Equation is At^2 + 2 hB t + C = 0 
+                A = u[0] ** 2 + u[1] ** 2 - self.mu**2 * u[2] ** 2
+                half_B = u[0] * p[0] + u[1] * p[1] - self.mu**2 * u[2] * p[2]
+                C = p[0] ** 2 + p[1] ** 2 - self.mu**2 * p[2] ** 2
+                # Equation is At^2 + 2 hB t + C = 0
                 if np.isclose(A, 0):
                     # The line has one intersection with entire cone
                     # (angle with z-axis is the same as cone apperture)
@@ -611,14 +640,14 @@ class PolygonContactPatch:
                         continue
                     if (p[2] - C / (2 * half_B) * u[2]) < 0:
                         # The intersection is : i = p - C / 2 hB u
-                        # We reject if the intersection is not on the cone: iz < 0 
+                        # We reject if the intersection is not on the cone: iz < 0
                         return True
                     continue
                 det = half_B**2 - A * C
                 if det < 0:
                     # There is no intersection, we can reject
                     return True
-                if (p[2] - half_B /A * u[2]) + np.sqrt(det) * np.abs(u[2] / A) < 0:
+                if (p[2] - half_B / A * u[2]) + np.sqrt(det) * np.abs(u[2] / A) < 0:
                     # There is at most two intersection, verify that the one with highest z is
                     # not in the cone
                     # z = pz + (-hb +/- sqrt(det))/a uz
@@ -638,7 +667,7 @@ class PolygonContactPatch:
                     # We sure have an intersection, can not reject
                     continue
                 # When alpha < 0, we need that the normal is strictly in the dual cone to reject
-                if n[0]**2 + n[1]**2 < n[2]**2 / self.mu**2:
+                if n[0] ** 2 + n[1] ** 2 < n[2] ** 2 / self.mu**2:
                     return True
                 continue
         return False
@@ -646,12 +675,13 @@ class PolygonContactPatch:
     """
     Cone elements generation
     """
-    def generate_point_in_hidden_cone(self, fn_max=1):
-        gene = np.random.uniform(0., 1., (self.N, 3))
 
-        h = fn_max * (gene[:,0] ** (1/3))
-        r = self.mu * h * np.sqrt(gene[:,1])
-        t = 2 * np.pi * gene[:,2]
+    def generate_point_in_hidden_cone(self, fn_max=1):
+        gene = np.random.uniform(0.0, 1.0, (self.N, 3))
+
+        h = fn_max * (gene[:, 0] ** (1 / 3))
+        r = self.mu * h * np.sqrt(gene[:, 1])
+        t = 2 * np.pi * gene[:, 2]
 
         return np.stack([r * np.cos(t), r * np.sin(t), h], axis=1)
 
@@ -664,61 +694,66 @@ class PolygonContactPatch:
     def generate_point_in_cone_space(self):
         return np.random.randn(6)
 
-
     """
     Cone projection:
     Using solver and warmstart strat
     """
+
     def project_hidden_cone(self, fis, _out=None):
         """
         Project in K_mu^n
         """
         if _out is None:
             _out = np.zeros(fis.shape)
-        xy = fis[:,:2]
+        xy = fis[:, :2]
         norm_xy = np.linalg.norm(xy, axis=1)
         z = fis[:, 2]
 
         almost_vertical = norm_xy < 1e-10
         inside_cone = np.logical_and(z >= 0, norm_xy <= self.mu * z)
-        inside_polar_cone = np.logical_and(z < 0, np.logical_or(norm_xy <= (-1 / self.mu) * z,almost_vertical))
+        inside_polar_cone = np.logical_and(
+            z < 0, np.logical_or(norm_xy <= (-1 / self.mu) * z, almost_vertical)
+        )
 
         not_cones = np.logical_not(np.logical_or(inside_cone, inside_polar_cone))
         numerical_area = np.logical_and(not_cones, almost_vertical)
         rest = np.logical_and(not_cones, np.logical_not(numerical_area))
 
         _out[inside_cone] = fis[inside_cone]
-        _out[inside_polar_cone] = 0.
-        _out[numerical_area, :2] = 0.
+        _out[inside_polar_cone] = 0.0
+        _out[numerical_area, :2] = 0.0
 
         alpha = (z[rest] + self.mu * norm_xy[rest]) / (self.mu**2 + 1)
-        alpha = np.clip(alpha, 0., None)
-        _out[rest, :2] = alpha[:, np.newaxis] * self.mu * xy[rest] / norm_xy[rest, np.newaxis]
+        alpha = np.clip(alpha, 0.0, None)
+        _out[rest, :2] = (
+            alpha[:, np.newaxis] * self.mu * xy[rest] / norm_xy[rest, np.newaxis]
+        )
         _out[rest, 2] = alpha
 
         return _out
-
 
     def project_hidden_cone_(self, fis):
         """
         Check if F is in K_mu^n
         """
-        norm_xy = np.linalg.norm(fis[:,:2], axis=1)
+        norm_xy = np.linalg.norm(fis[:, :2], axis=1)
         z = fis[:, 2]
 
         almost_vertical = norm_xy < 1e-10
         inside_cone = np.logical_and(z >= 0, norm_xy <= self.mu * z)
-        inside_polar_cone = np.logical_and(z < 0, np.logical_or(norm_xy <= (-1 / self.mu) * z,almost_vertical))
+        inside_polar_cone = np.logical_and(
+            z < 0, np.logical_or(norm_xy <= (-1 / self.mu) * z, almost_vertical)
+        )
 
         not_cones = np.logical_not(np.logical_or(inside_cone, inside_polar_cone))
         numerical_area = np.logical_and(not_cones, almost_vertical)
         rest = np.logical_and(not_cones, np.logical_not(numerical_area))
 
-        fis[inside_polar_cone] = 0.
-        fis[numerical_area, :2] = 0.
+        fis[inside_polar_cone] = 0.0
+        fis[numerical_area, :2] = 0.0
 
         alpha = (z[rest] + self.mu * norm_xy[rest]) / (self.mu**2 + 1)
-        alpha = np.clip(alpha, 0., None)
+        alpha = np.clip(alpha, 0.0, None)
 
         fis[rest, :2] *= (alpha * self.mu / norm_xy[rest])[:, np.newaxis]
         fis[rest, 2] = alpha
@@ -733,21 +768,29 @@ class PolygonContactPatch:
             return l
 
         # Warmstart
-        if self.warmstart_strat == 'prev' and self.fis_prev is not None:
-            kwargs = {'x_0': self.fis_prev}
-        elif self.warmstart_strat == 'prev_state' and self.fis_prev is not None:
+        if self.warmstart_strat == "prev" and self.fis_prev is not None:
+            kwargs = {"x_0": self.fis_prev}
+        elif self.warmstart_strat == "prev_state" and self.fis_prev is not None:
             kwargs = self.state_prev
-        elif self.warmstart_strat == 'prev_linadjust' and self.fis_prev is not None:
-            kwargs = {'x_0': self.project_hidden_cone(self.fis_prev + self.apply_A_pinv(l - self.l_prev))}
-        elif self.warmstart_strat == 'prev_linadjust_state' and self.fis_prev is not None:
+        elif self.warmstart_strat == "prev_linadjust" and self.fis_prev is not None:
+            kwargs = {
+                "x_0": self.project_hidden_cone(
+                    self.fis_prev + self.apply_A_pinv(l - self.l_prev)
+                )
+            }
+        elif (
+            self.warmstart_strat == "prev_linadjust_state" and self.fis_prev is not None
+        ):
             kwargs = self.state_prev
-            kwargs['x_0'] = self.project_hidden_cone(self.fis_prev + self.apply_A_pinv(l - self.l_prev))
-            kwargs['l_0'] = None
-            kwargs['y_0'] = None
-            kwargs['t_0'] = None
+            kwargs["x_0"] = self.project_hidden_cone(
+                self.fis_prev + self.apply_A_pinv(l - self.l_prev)
+            )
+            kwargs["l_0"] = None
+            kwargs["y_0"] = None
+            kwargs["t_0"] = None
         else:
-            kwargs = {'x_0': self.project_hidden_cone(self.apply_A_pinv(l))}
-        kwargs['history'] = history
+            kwargs = {"x_0": self.project_hidden_cone(self.apply_A_pinv(l))}
+        kwargs["history"] = history
 
         # Update state for warmstart 1
         self.l_prev = l.copy()
@@ -755,7 +798,7 @@ class PolygonContactPatch:
         # Optim solve and retrieve projection
         fis_opti, success, state = self.solver.solve(l, **kwargs)
         if not success and strict:
-            raise Exception('No solution found')
+            raise Exception("No solution found")
 
         proj = self.apply_A(fis_opti, _out=_out)
 

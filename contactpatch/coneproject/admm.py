@@ -1,33 +1,33 @@
 import numpy as np
 
 
-class ADMM():
+class ADMM:
     """
     ADMM solver with pure AL alternate option
     """
-    def __init__(
-            self,
-            patch,
-            max_iterations=2000,
-            rel_crit=1e-4,
-            abs_crit=1e-5,
-            abs_obj_crit=1e-12,
-            min_residual_threshold=1e-8,
-            rho_clip=1e6,
-            prox=1e-6,
-            alpha=1.,
-            rho_init=1e-1,
-            rho_power=.3,
-            rho_power_factor=.15,
-            rho_lin_factor=2.,
-            rho_update_ratio=10.,
-            rho_update_cooldown=5,
-            rho_adaptive_fraction=.4,
-            rho_update_rule='constant',
-            dual_momentum=0.,
-            verbose=False
-        ):
 
+    def __init__(
+        self,
+        patch,
+        max_iterations=2000,
+        rel_crit=1e-4,
+        abs_crit=1e-5,
+        abs_obj_crit=1e-12,
+        min_residual_threshold=1e-8,
+        rho_clip=1e6,
+        prox=1e-6,
+        alpha=1.0,
+        rho_init=1e-1,
+        rho_power=0.3,
+        rho_power_factor=0.15,
+        rho_lin_factor=2.0,
+        rho_update_ratio=10.0,
+        rho_update_cooldown=5,
+        rho_adaptive_fraction=0.4,
+        rho_update_rule="constant",
+        dual_momentum=0.0,
+        verbose=False,
+    ):
         self.patch = patch
 
         self.max_iterations = max_iterations
@@ -60,15 +60,15 @@ class ADMM():
             self.rho_factor = rho_lin_factor
         elif self.rho_update_rule in {"spectral"}:
             self.rho_factor = cond**rho_power_factor
- 
+
     def solve(self, l, x_0=None, l_0=None, rho_0=None, history=None, **kwargs):
         """
         Solve: min_{x in C} (1/2)||Ax - l||^2
-        
+
         Args:
             l: Target vector
             x_0: Initial point (optional, defaults to zero)
-        
+
         Returns:
             x: Solution
             converged: True if converged, False if max_iter reached
@@ -94,8 +94,8 @@ class ADMM():
             residual_0 -= l
             l_k = np.zeros(self.patch.hidden_shape)
             self.patch.apply_AT(residual_0, _out=l_k)
-  
-        if self.dual_momentum > 0.:
+
+        if self.dual_momentum > 0.0:
             l_kp1 = l_k.copy()
         else:
             l_kp1 = l_k
@@ -107,10 +107,10 @@ class ADMM():
         if x_0 is not None:
             x_k[...] = x_0
             self.patch.project_hidden_cone(x_0, _out=y_k)
-            feasibility_error = np.linalg.norm(x_k - y_k)            
+            feasibility_error = np.linalg.norm(x_k - y_k)
             if feasibility_error < 1e-8:
                 # x_0 is feasible, use conservative alpha
-                alpha = 1.0 if self.alpha > 1. else self.alpha
+                alpha = 1.0 if self.alpha > 1.0 else self.alpha
                 if self.verbose:
                     print("Initial point is feasible, using alpha=1.0")
             else:
@@ -142,10 +142,10 @@ class ADMM():
             # l_kp1 = (1+beta)lk - beta lkm1 + rho (x_kp1 - y_kp1)
             np.subtract(x_k, y_k, out=diff)
 
-            if self.dual_momentum > 0. and k > 0:
+            if self.dual_momentum > 0.0 and k > 0:
                 # l_km1-> l_kp1
-                l_kp1 *= - beta
-                l_kp1 += (1. + beta) * l_k
+                l_kp1 *= -beta
+                l_kp1 += (1.0 + beta) * l_k
             l_kp1 += rho * diff
 
             # 4. Convergence check
@@ -153,10 +153,11 @@ class ADMM():
             dual_residual = rho * np.linalg.norm(y_k - y_km1)
 
             eps_primal = np.sqrt(self.patch.m) * self.abs_crit + self.rel_crit * max(
-                np.linalg.norm(x_k),
-                np.linalg.norm(y_k)
+                np.linalg.norm(x_k), np.linalg.norm(y_k)
             )
-            eps_dual = np.sqrt(self.patch.m) * self.abs_crit + self.rel_crit * np.linalg.norm(l_k)
+            eps_dual = np.sqrt(
+                self.patch.m
+            ) * self.abs_crit + self.rel_crit * np.linalg.norm(l_k)
 
             self.patch.apply_A(y_k, _out=obj_residual)
             obj_residual -= l
@@ -173,14 +174,16 @@ class ADMM():
 
             # Exit cond
             if admm_converged or obj_near_0:
-                return y_k, True, {'x_0': y_k, 'l_0': l_kp1, 'rho_0': rho}
+                return y_k, True, {"x_0": y_k, "l_0": l_kp1, "rho_0": rho}
 
             rho_update_delay += 1
             # 5. rho update
             if rho_update_delay > self.rho_update_cooldown:
                 change = False
-                residuals_active = (primal_residual > self.min_residual_threshold or 
-                                    dual_residual > self.min_residual_threshold)
+                residuals_active = (
+                    primal_residual > self.min_residual_threshold
+                    or dual_residual > self.min_residual_threshold
+                )
                 if self.rho_update_rule in {"spectral", "linear"} and residuals_active:
                     if primal_residual > self.rho_update_ratio * dual_residual:
                         rho *= self.rho_factor
@@ -191,9 +194,15 @@ class ADMM():
                 elif self.rho_update_rule in {"osqp"}:
                     ratio = primal_residual / (dual_residual + 1e-10)
                     # Adaptive scaling
-                    if ratio > self.rho_update_ratio or ratio < 1 / self.rho_update_ratio:
+                    if (
+                        ratio > self.rho_update_ratio
+                        or ratio < 1 / self.rho_update_ratio
+                    ):
                         rho_new = rho * np.sqrt(ratio)
-                        rho = rho * (1 - self.rho_adaptive_fraction) + rho_new * self.rho_adaptive_fraction
+                        rho = (
+                            rho * (1 - self.rho_adaptive_fraction)
+                            + rho_new * self.rho_adaptive_fraction
+                        )
                         change = True
                 if change:
                     rho = np.clip(rho, 1 / self.rho_clip, self.rho_clip)
@@ -206,10 +215,10 @@ class ADMM():
 
         if self.verbose:
             print(f"\nMaximum iterations ({self.max_iterations}) reached")
-        return y_km1, False, {'x_0': y_km1, 'l_0': l_k, 'rho_0': rho}
+        return y_km1, False, {"x_0": y_km1, "l_0": l_k, "rho_0": rho}
 
     def _print_header(self):
-        """Print header for verbose output"""        
+        """Print header for verbose output"""
         print("=" * 70)
         print(f"ADMM Solver with {self.rho_update_rule} update")
         print(f"Max iterations: {self.max_iterations}, Tolerance: {self.rel_crit:.1e}")
