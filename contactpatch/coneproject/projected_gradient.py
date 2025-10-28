@@ -252,9 +252,9 @@ class ProjectedGradient():
             if self.accel:
                 line += f" {t_k:8.3f}"
             else:
-                line += f"    N/A"
+                line += "    N/A"
             if self.armijo:
                 line += f" {alpha:8.3f} {arm_i:6d} "
             else:
-                line += f"    N/A    N/A"
+                line += "    N/A    N/A"
             print(line)

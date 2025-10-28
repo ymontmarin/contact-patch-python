@@ -1,6 +1,5 @@
 import numpy as np
 from scipy.optimize import linprog
-from scipy.spatial import ConvexHull
 import itertools
 from typing import List, Tuple, Optional, Set
 
@@ -511,7 +510,7 @@ class ExactConvexGeometricSimplex:
         # Check constraint AW = c
         constraint_value = self.A @ solution
         constraint_error = np.linalg.norm(constraint_value - self.c)
-        print(f"Constraint AW = c:")
+        print("Constraint AW = c:")
         print(f"  AW = {constraint_value}")
         print(f"  c  = {self.c}")
         print(f"  Error: {constraint_error:.8f} {'✅' if constraint_error < 1e-6 else '❌'}")
@@ -519,13 +518,13 @@ class ExactConvexGeometricSimplex:
         # Check sum constraint
         sum_weights = np.sum(solution)
         sum_error = abs(sum_weights - 1.0)
-        print(f"Sum constraint Σw_i = 1:")
+        print("Sum constraint Σw_i = 1:")
         print(f"  Sum: {sum_weights:.8f}")
         print(f"  Error: {sum_error:.8f} {'✅' if sum_error < 1e-6 else '❌'}")
         
         # Check non-negativity
         min_weight = np.min(solution)
-        print(f"Non-negativity w_i ≥ 0:")
+        print("Non-negativity w_i ≥ 0:")
         print(f"  Min weight: {min_weight:.8f} {'✅' if min_weight >= -1e-8 else '❌'}")
         
         # Overall verification
@@ -668,7 +667,7 @@ class ExactConvexGeometricSimplex:
         lambda_star = self.S[vertex_idx] - np.dot(p_i, mu_star)
         
         print(f"   ✅ Regularized solution: μ* = {mu_star}, λ* = {lambda_star:.6f}")
-        print(f"   🧭 μ* set to natural gradient direction")
+        print("   🧭 μ* set to natural gradient direction")
         
         return mu_star, lambda_star
 
@@ -1022,7 +1021,7 @@ class WarmStartConvexSimplex(ExactConvexGeometricSimplex):
                 print(f"✅ Warm-start successful with basis {initial_basis}")
                 current_basis, current_weights = initial_solution
             else:
-                print(f"❌ Warm-start basis infeasible, falling back to heuristics")
+                print("❌ Warm-start basis infeasible, falling back to heuristics")
                 initial_solution = self._smart_initialization_with_preprocessing()
                 current_basis, current_weights = initial_solution
         else:

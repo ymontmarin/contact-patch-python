@@ -3,9 +3,8 @@ import pandas as pd
 import time
 from itertools import product
 import matplotlib.pyplot as plt
-import seaborn as sns
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Any
 import warnings
 
 from contactpatch.patches import PolygonContactPatch
@@ -462,7 +461,7 @@ class OptimizationBenchmark:
         total_runs = len(all_configs) * len(self.test_problems) * self.n_test_points
         
         print(f"\n{'='*70}")
-        print(f"HYPERPARAMETER BENCHMARK SUITE")
+        print("HYPERPARAMETER BENCHMARK SUITE")
         print(f"{'='*70}")
         print(f"Fixed PGD convergence: rel={self.STANDARD_PGD_CONVERGENCE['rel_crit']}, "
               f"abs={self.STANDARD_PGD_CONVERGENCE['abs_crit']}")
@@ -538,7 +537,7 @@ class OptimizationBenchmark:
                 continue
             
             print(f"\n{solver} (converged cases only, n={len(converged)}):")
-            print(f"  Final Objective Statistics:")
+            print("  Final Objective Statistics:")
             print(f"    Median:         {converged['final_objective'].median():.3e}")
             print(f"    Mean:           {converged['final_objective'].mean():.3e}")
             print(f"    Std:            {converged['final_objective'].std():.3e}")
@@ -562,11 +561,11 @@ class OptimizationBenchmark:
                 print(f"  Median objective ratio ({solvers[0]}/{solvers[1]}): {ratio:.2f}")
                 
                 if 0.1 < ratio < 10:
-                    print(f"  ✓ Solvers achieve similar accuracy (ratio within 10×)")
-                    print(f"  ✓ Convergence criteria comparison is FAIR")
+                    print("  ✓ Solvers achieve similar accuracy (ratio within 10×)")
+                    print("  ✓ Convergence criteria comparison is FAIR")
                 else:
-                    print(f"  ⚠ Solvers achieve different accuracy (ratio > 10×)")
-                    print(f"  ⚠ Consider adjusting convergence criteria")
+                    print("  ⚠ Solvers achieve different accuracy (ratio > 10×)")
+                    print("  ⚠ Consider adjusting convergence criteria")
         
         print("="*70)
     
@@ -586,7 +585,7 @@ class OptimizationBenchmark:
         total_runs = len(df)
         failure_rate = 100 * total_failures / total_runs
         
-        print(f"\nOVERALL FAILURE STATISTICS:")
+        print("\nOVERALL FAILURE STATISTICS:")
         print(f"  Total runs:     {total_runs}")
         print(f"  Failures:       {total_failures}")
         print(f"  Failure rate:   {failure_rate:.2f}%")
@@ -616,10 +615,10 @@ class OptimizationBenchmark:
             rate_std = np.std(solver_rates)
             if rate_std < 2.0:
                 print(f"\n  → Failure rates are similar across solvers (std={rate_std:.2f}%)")
-                print(f"  → Failures are likely PROBLEM-DEPENDENT, not solver-dependent")
+                print("  → Failures are likely PROBLEM-DEPENDENT, not solver-dependent")
             else:
                 print(f"\n  → Failure rates vary across solvers (std={rate_std:.2f}%)")
-                print(f"  → Some solvers may be more robust than others")
+                print("  → Some solvers may be more robust than others")
         
         # 2. By configuration
         print("\n" + "-"*70)
@@ -659,10 +658,10 @@ class OptimizationBenchmark:
         total_polygons = len(poly_rates)
         if n_problematic_polygons > 0:
             print(f"\n  → {n_problematic_polygons} / {total_polygons} polygons have >50% failure rate")
-            print(f"  → Failures are CONCENTRATED in specific degenerate geometries")
+            print("  → Failures are CONCENTRATED in specific degenerate geometries")
         else:
-            print(f"\n  → Failures are DISTRIBUTED across polygons")
-            print(f"  → Not due to specific bad geometries")
+            print("\n  → Failures are DISTRIBUTED across polygons")
+            print("  → Not due to specific bad geometries")
 
         # 5. By specific points
         print("\n" + "-"*70)
@@ -681,10 +680,10 @@ class OptimizationBenchmark:
         total_points = len(point_rates)
         if n_problematic_points > 0:
             print(f"\n  → {n_problematic_points} / {total_points} points have >50% failure rate")
-            print(f"  → Failures are CONCENTRATED in specific degenerate geometries")
+            print("  → Failures are CONCENTRATED in specific degenerate geometries")
         else:
-            print(f"\n  → Failures are DISTRIBUTED across points")
-            print(f"  → Not due to specific bad geometries")
+            print("\n  → Failures are DISTRIBUTED across points")
+            print("  → Not due to specific bad geometries")
 
         # 6. Iterations analysis
         print("\n" + "-"*70)
@@ -693,7 +692,7 @@ class OptimizationBenchmark:
         max_iter = df['hp_max_iterations'].iloc[0] if 'hp_max_iterations' in df.columns else self.max_iter
         
         if total_failures > 0:
-            print(f"\nFailed cases:")
+            print("\nFailed cases:")
             print(f"  Mean iterations:   {failed['iterations'].mean():.1f}")
             print(f"  Median iterations: {failed['iterations'].median():.1f}")
             print(f"  Max iterations:    {failed['iterations'].max()}")
@@ -706,18 +705,18 @@ class OptimizationBenchmark:
             print(f"\n  Cases at/near max iterations: {at_max} / {total_failures} ({at_max_rate:.1f}%)")
             
             if at_max_rate > 80:
-                print(f"\n  ⚠️  DIAGNOSIS: Most failures hit max iterations!")
+                print("\n  ⚠️  DIAGNOSIS: Most failures hit max iterations!")
                 print(f"  → Solution: Increase max_iterations to {max_iter * 2}-{max_iter * 3}")
-                print(f"  → The solver is making progress but needs more time")
+                print("  → The solver is making progress but needs more time")
             elif at_max_rate > 20:
-                print(f"\n  ⚠️  DIAGNOSIS: Some failures hit max iterations")
-                print(f"  → Mixed cause: both iteration limit and problem issues")
+                print("\n  ⚠️  DIAGNOSIS: Some failures hit max iterations")
+                print("  → Mixed cause: both iteration limit and problem issues")
             else:
-                print(f"\n  ℹ️  DIAGNOSIS: Failures NOT due to iteration limit")
-                print(f"  → Failures occur early, likely due to:")
-                print(f"     - Numerical issues (ill-conditioning)")
-                print(f"     - Degenerate geometries")
-                print(f"     - Infeasible subproblems")
+                print("\n  ℹ️  DIAGNOSIS: Failures NOT due to iteration limit")
+                print("  → Failures occur early, likely due to:")
+                print("     - Numerical issues (ill-conditioning)")
+                print("     - Degenerate geometries")
+                print("     - Infeasible subproblems")
         
         # 7. Objective values at failure
         print("\n" + "-"*70)
@@ -741,11 +740,11 @@ class OptimizationBenchmark:
                 print(f"  Ratio:           {ratio:.2f}×")
                 
                 if ratio < 10:
-                    print(f"\n  ℹ️  Failed cases are close to optimal!")
-                    print(f"  → May just need slightly looser convergence criteria")
+                    print("\n  ℹ️  Failed cases are close to optimal!")
+                    print("  → May just need slightly looser convergence criteria")
                 else:
-                    print(f"\n  ⚠️  Failed cases have much higher objective")
-                    print(f"  → Solver is stuck far from optimum")
+                    print("\n  ⚠️  Failed cases have much higher objective")
+                    print("  → Solver is stuck far from optimum")
         
         print("\n" + "="*70)
         
@@ -907,7 +906,7 @@ class OptimizationBenchmark:
                 print(f"  Median Time:      {stats['time_ms']:.3f} ms")
                 print(f"  Mean Iterations:  {stats['iterations']:.1f}")
                 print(f"  Convergence Rate: {stats['converged']:.1f}%")
-                print(f"\n  Full Hyperparameter Configuration:")
+                print("\n  Full Hyperparameter Configuration:")
                 print(f"  {'-'*66}")
                 
                 # Get the hyperparameters for this config
@@ -1172,7 +1171,7 @@ class OptimizationBenchmark:
             print(f"Iterations:       {failure_case['iterations']}")
             print(f"Final Objective:  {failure_case['final_objective']:.6e}")
             print(f"\nPolygon vertices shape: {test_problem['vis'].shape}")
-            print(f"Test point (force in R^6):")
+            print("Test point (force in R^6):")
             print(f"  {test_point}")
             print(f"  Norm: {np.linalg.norm(test_point):.6f}")
             
@@ -1243,24 +1242,24 @@ class OptimizationBenchmark:
             print()
             
             # Print test code
-            print(f"# Test this case:")
+            print("# Test this case:")
             print(f"mu = {self.mu}")
             print(f"ker_precompute = {self.ker_precompute}")
             print(f"poly_{ex['example_id']} = PolygonContactPatch(")
             print(f"    vis=vis_{ex['example_id']},")
-            print(f"    mu=mu,")
-            print(f"    ker_precompute=ker_precompute,")
-            print(f"    warmstart_strat=None,")
+            print("    mu=mu,")
+            print("    ker_precompute=ker_precompute,")
+            print("    warmstart_strat=None,")
             print(f"    solver_tyep='{ex['solver_type']}',")
             print(f"    solver_kwargs=kwargs_{ex['example_id']}")
-            print(f")")
+            print(")")
             print()
-            print(f"# Try to project (should fail or take many iterations):")
+            print("# Try to project (should fail or take many iterations):")
             print(f"history_{ex['example_id']} = []")
             print(f"result_{ex['example_id']} = poly_{ex['example_id']}.project_cone(")
             print(f"    test_point_{ex['example_id']}, ")
             print(f"    history=history_{ex['example_id']}")
-            print(f")")
+            print(")")
             print(f"print(f'Converged: {{len(history_{ex['example_id']}) < 5000}}, Iterations: {{len(history_{ex['example_id']})}}')")
             print()
             print()

@@ -1,5 +1,4 @@
 import numpy as np
-import itertools as itt
 import scipy as sc
 
 from contactpatch.coneproject import ProjectedGradient, ADMM
