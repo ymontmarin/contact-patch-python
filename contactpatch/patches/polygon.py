@@ -725,7 +725,7 @@ class PolygonContactPatch:
         fis[rest, 2] = alpha
         return fis
 
-    def project_cone(self, l, _out=None, history=None):
+    def project_cone(self, l, _out=None, strict=False, history=None):
         """
         Check if F is in K_mu^n
         """
@@ -755,7 +755,7 @@ class PolygonContactPatch:
 
         # Optim solve and retrieve projection
         fis_opti, success, state = self.solver.solve(l, **kwargs)
-        if not success:
+        if not success and strict:
             raise Exception('No solution found')
 
         proj = self.apply_A(fis_opti, _out=_out)

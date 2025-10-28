@@ -200,8 +200,7 @@ def test_projection_with_pgs():
         'rel_obj_crit': 1e-6,
         'abs_obj_crit': 1e-12,
         'optim_crit': 1e-12,
-        'alpha_cond': 1.,
-        'alpha_free': .99,
+        'alpha': 1.,
         'verbose': True,
     }
     poly = PolygonContactPatch(

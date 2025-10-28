@@ -9,7 +9,7 @@ class ProjectedGradient():
     def __init__(
             self,
             patch,
-            max_iterations=1000,
+            alpha=.999,
             accel=True,
             precond=True,
             adaptive_restart=True,
@@ -23,8 +23,7 @@ class ProjectedGradient():
             rel_obj_crit=1e-6,
             abs_obj_crit=1e-12,
             optim_crit=1e-12,
-            alpha_cond=1.,
-            alpha_free=.99,
+            max_iterations=1000,
             verbose=False,
         ):
         self.patch = patch
@@ -50,10 +49,10 @@ class ProjectedGradient():
         # Find the initial step depending on the mode
         if self.precond:
             # Full step as precond
-            self.alpha = alpha_cond
+            self.alpha = alpha
         else:
             # Optimal step for projected gradient
-            self.alpha = alpha_free / self.patch.L
+            self.alpha = alpha / self.patch.L
 
     def solve(self, l, x_0=None, y_0=None, t_0=None, history=None, **kwargs):
         """

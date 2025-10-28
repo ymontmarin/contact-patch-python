@@ -102,47 +102,6 @@ def plot_convergence_history(history, title="Solver Convergence History", solver
     plt.tight_layout()
     plt.show()
 
-# def plot_simple_history(history, solver_type='PGD'):
-#     """
-#     Simple single-plot version for quick checks
-#     """
-#     if len(history) == 0:
-#         print("No history to plot!")
-#         return
-    
-#     history = np.array(history)
-    
-#     fig, ax = plt.subplots(figsize=(10, 6))
-    
-#     # Always plot objective
-#     ax.semilogy(history[:, 0], history[:, 1], 'b-', linewidth=2, label='Objective')
-    
-#     if solver_type == 'PGD':
-#         # Add gradient norm
-#         ax2 = ax.twinx()
-#         ax2.semilogy(history[:, 0], history[:, 2], 'r-', linewidth=2, label='Gradient Norm')
-#         ax2.set_ylabel('Gradient Norm', color='r')
-#         ax2.tick_params(axis='y', labelcolor='r')
-        
-#     elif solver_type == 'ADMM':
-#         # Add residuals
-#         ax2 = ax.twinx()
-#         ax2.semilogy(history[:, 0], history[:, 2], 'r-', linewidth=2, label='Primal')
-#         ax2.semilogy(history[:, 0], history[:, 3], 'g-', linewidth=2, label='Dual')
-#         ax2.set_ylabel('Residuals', color='r')
-#         ax2.tick_params(axis='y', labelcolor='r')
-#         ax2.legend(loc='upper right')
-    
-#     ax.set_xlabel('Iteration')
-#     ax.set_ylabel('Objective', color='b')
-#     ax.tick_params(axis='y', labelcolor='b')
-#     ax.set_title(f'{solver_type} Convergence')
-#     ax.legend(loc='upper left')
-#     ax.grid(True, alpha=0.3)
-    
-#     plt.tight_layout()
-#     plt.show()
-
 # ==================================================================
 # FAILURE EXAMPLE #1
 # PGD - PGD_baseline
