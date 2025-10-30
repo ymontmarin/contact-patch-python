@@ -11,7 +11,7 @@ from joblib import Parallel, delayed
 from contactpatch.patches import PolygonContactPatch
 
 
-MU = 1.
+MU = 1.0
 KER_PRECOMPUTE = False
 MAX_TIME = 0.05
 MAX_ITER = 2000
@@ -64,8 +64,8 @@ class OptimizationBenchmark:
         self,
         n_vertice_min: int = 3,
         n_vertice_max: int = 25,
-        mu_min: float = .01,
-        mu_max: float = 2.,
+        mu_min: float = 0.01,
+        mu_max: float = 2.0,
         n_problems: int = 30,
         n_test_points: int = 20,
         ker_precompute: bool = KER_PRECOMPUTE,
@@ -101,7 +101,9 @@ class OptimizationBenchmark:
             self.test_points.append(fl)
 
         print("Generating test problems...")
-        n_vertices_list = np.random.randint(self.n_vertice_min, self.n_vertice_max, size=self.n_problems)
+        n_vertices_list = np.random.randint(
+            self.n_vertice_min, self.n_vertice_max, size=self.n_problems
+        )
         mu_list = np.random.uniform(self.mu_min, self.mu_max, size=self.n_problems)
         self.test_problems = []
         for problem_id, (n_vertices, mu) in enumerate(zip(n_vertices_list, mu_list)):
@@ -115,7 +117,12 @@ class OptimizationBenchmark:
                 except Exception:
                     factor *= 10
             self.test_problems.append(
-                {"problem_id": problem_id, "n_vertices": n_vertices, "mu": mu, "vis": vis}
+                {
+                    "problem_id": problem_id,
+                    "n_vertices": n_vertices,
+                    "mu": mu,
+                    "vis": vis,
+                }
             )
 
         print(f"✓ Generated {len(self.test_points)} test points")
@@ -271,10 +278,10 @@ class OptimizationBenchmark:
                     }
                     if armijo:
                         for a_iter, a_sigma, a_beta, a_fr in product(
-                                [5, 10, 20],
-                                [0.01, 0.1, 0.5],
-                                [0.3, 0.5, 0.7],
-                                [0.5, 0.9],
+                            [5, 10, 20],
+                            [0.01, 0.1, 0.5],
+                            [0.3, 0.5, 0.7],
+                            [0.5, 0.9],
                         ):
                             config_spe = config.copy()
                             config_spe.update(
@@ -405,9 +412,9 @@ class OptimizationBenchmark:
         elif mode == "maxi_GS":
             for alpha, dual_momentum, prox, rho_update_rule in product(
                 [1.0, 1.3, 1.6, 1.9],
-                [.0, .2, .4],
-                [.0, 1e-6, 1e-3],
-                ["constant", "linear", "osqp", "spectral"]
+                [0.0, 0.2, 0.4],
+                [0.0, 1e-6, 1e-3],
+                ["constant", "linear", "osqp", "spectral"],
             ):
                 name_parts = ["ADMM"]
                 name_parts.append(f"{rho_update_rule}")
@@ -423,84 +430,91 @@ class OptimizationBenchmark:
                     "prox": prox,
                 }
 
-                if rho_update_rule is "constant":
+                if rho_update_rule == "constant":
                     for rho_init in [1e-1, 1, 10]:
                         config_spe = config.copy()
                         config_spe.update(
-                        {
-                            "rho_init": rho_init,
-                        }
+                            {
+                                "rho_init": rho_init,
+                            }
                         )
-                        config_name_spe = "_".join([
-                            config_name,
-                            f"ri_{rho_init}",
-                        ])
+                        config_name_spe = "_".join(
+                            [
+                                config_name,
+                                f"ri_{rho_init}",
+                            ]
+                        )
                         configs[config_name_spe] = config_spe
                 else:
                     for rho_update_ratio, rho_update_cooldown in product(
-                        [5, 10],
-                        [1, 5]
+                        [5, 10], [1, 5]
                     ):
                         config_spe = config.copy()
                         config_spe.update(
                             {
-                                    "rho_update_ratio": rho_update_ratio,
-                                    "rho_update_cooldown": rho_update_cooldown,
+                                "rho_update_ratio": rho_update_ratio,
+                                "rho_update_cooldown": rho_update_cooldown,
                             }
                         )
-                        config_name_spe = "_".join([
-                            config_name,
-                            f"rur_{rho_update_ratio}",
-                            f"ruc_{rho_update_cooldown}",
-                        ])
-                        if rho_update_rule is "linear":
+                        config_name_spe = "_".join(
+                            [
+                                config_name,
+                                f"rur_{rho_update_ratio}",
+                                f"ruc_{rho_update_cooldown}",
+                            ]
+                        )
+                        if rho_update_rule == "linear":
                             for rho_init, rho_lin_factor in product(
-                                [1e-1, 1, 10],
-                                [2, 5, 10]
+                                [1e-1, 1, 10], [2, 5, 10]
                             ):
                                 config_spe_spe = config_spe.copy()
                                 config_spe_spe.update(
-                                {
-                                    "rho_init": rho_init,
-                                    "rho_lin_factor": rho_lin_factor,
-                                }
+                                    {
+                                        "rho_init": rho_init,
+                                        "rho_lin_factor": rho_lin_factor,
+                                    }
                                 )
-                                config_name_spe_spe = "_".join([
-                                    config_name_spe,
-                                    f"ri_{rho_init}",
-                                    f"rlf_{rho_lin_factor}",
-                                ])
+                                config_name_spe_spe = "_".join(
+                                    [
+                                        config_name_spe,
+                                        f"ri_{rho_init}",
+                                        f"rlf_{rho_lin_factor}",
+                                    ]
+                                )
                                 configs[config_name_spe_spe] = config_spe_spe
-                        elif rho_update_rule is "osqp":
-                            for rho_adaptive_fraction in [.3, .5, .8]:
+                        elif rho_update_rule == "osqp":
+                            for rho_adaptive_fraction in [0.3, 0.5, 0.8]:
                                 config_spe_spe = config_spe.copy()
                                 config_spe_spe.update(
-                                {
-                                    "rho_adaptive_fraction": rho_adaptive_fraction,
-                                }
+                                    {
+                                        "rho_adaptive_fraction": rho_adaptive_fraction,
+                                    }
                                 )
-                                config_name_spe_spe = "_".join([
-                                    config_name_spe,
-                                    f"raf_{rho_adaptive_fraction}",
-                                ])
+                                config_name_spe_spe = "_".join(
+                                    [
+                                        config_name_spe,
+                                        f"raf_{rho_adaptive_fraction}",
+                                    ]
+                                )
                                 configs[config_name_spe_spe] = config_spe_spe
-                        elif rho_update_rule is "spectral":
+                        elif rho_update_rule == "spectral":
                             for rho_power, rho_power_factor in product(
-                                [.1, .3, .5],
-                                [.05, .15, .3]
+                                [0.1, 0.3, 0.5], [0.05, 0.15, 0.3]
                             ):
                                 config_spe_spe = config_spe.copy()
                                 config_spe_spe.update(
-                                {
-                                    "rho_power": rho_power,
-                                    "rho_power_factor": rho_power_factor,
-                                }
+                                    {
+                                        "rho_power": rho_power,
+                                        "rho_power_factor": rho_power_factor,
+                                    }
                                 )
-                                config_name_spe_spe = "_".join([
-                                    config_name_spe,
-                                    f"rp_{rho_power}",
-                                    f"rpf_{rho_power_factor}",
-                                ])
+                                config_name_spe_spe = "_".join(
+                                    [
+                                        config_name_spe,
+                                        f"rp_{rho_power}",
+                                        f"rpf_{rho_power_factor}",
+                                    ]
+                                )
                                 configs[config_name_spe_spe] = config_spe_spe
 
         for name, config in configs.items():
@@ -625,17 +639,19 @@ class OptimizationBenchmark:
         for (solver_type, config_name), hyperparams in all_configs.items():
             for problem in self.test_problems:
                 for point_id, test_point in enumerate(self.test_points):
-                    benchmark_tasks.append({
-                        "solver_type": solver_type,
-                        "config_name": config_name,
-                        "config": hyperparams,
-                        "n_vertices": problem["n_vertices"],
-                        "problem_id": problem["problem_id"],
-                        "test_point_id": point_id,
-                        "test_point": test_point,
-                        "mu": problem["mu"],
-                        "vis": problem["vis"],
-                    })
+                    benchmark_tasks.append(
+                        {
+                            "solver_type": solver_type,
+                            "config_name": config_name,
+                            "config": hyperparams,
+                            "n_vertices": problem["n_vertices"],
+                            "problem_id": problem["problem_id"],
+                            "test_point_id": point_id,
+                            "test_point": test_point,
+                            "mu": problem["mu"],
+                            "vis": problem["vis"],
+                        }
+                    )
 
         # Run benchmarks in parallel
         print(f"Running {len(benchmark_tasks)} benchmarks in parallel...")
@@ -1010,7 +1026,6 @@ class OptimizationBenchmark:
                 ax.set_title("Final Objective: Success vs Failed")
                 ax.grid(axis="y", alpha=0.3)
 
-
         # 6. Time distribution: failed vs success
         ax = axes[1, 2]
         if len(success) > 0 and len(failed) > 0:
@@ -1328,9 +1343,7 @@ class OptimizationBenchmark:
         selected_groups.sort(key=lambda x: len(x[2]), reverse=True)
 
         # Select n_examples from different groups
-        for idx, (n_vertices, pb_id, group) in enumerate(
-            selected_groups[:n_examples]
-        ):
+        for idx, (n_vertices, pb_id, group) in enumerate(selected_groups[:n_examples]):
             # Pick one failure case from this group
             failure_case = group.iloc[0]
 
@@ -1719,8 +1732,8 @@ def run_quick_test(
 def run_standard_benchmark(
     n_vertice_min: int = 3,
     n_vertice_max: int = 15,
-    mu_min: float = .1,
-    mu_max: float = 2.,
+    mu_min: float = 0.1,
+    mu_max: float = 2.0,
     n_problems: int = 20,
     n_test_points: int = 10,
     ker_precompute: bool = KER_PRECOMPUTE,
@@ -1758,8 +1771,8 @@ def run_standard_benchmark(
 def run_extensive_benchmark(
     n_vertice_min: int = 3,
     n_vertice_max: int = 25,
-    mu_min: float = .05,
-    mu_max: float = 2.,
+    mu_min: float = 0.05,
+    mu_max: float = 2.0,
     n_problems: int = 30,
     n_test_points: int = 20,
     ker_precompute: bool = KER_PRECOMPUTE,
@@ -1811,8 +1824,8 @@ def run_extensive_benchmark(
 def run_gridsearch_benchmark(
     n_vertice_min: int = 3,
     n_vertice_max: int = 25,
-    mu_min: float = .05,
-    mu_max: float = 2.,
+    mu_min: float = 0.05,
+    mu_max: float = 2.0,
     n_problems: int = 15,
     n_test_points: int = 10,
     ker_precompute: bool = KER_PRECOMPUTE,
