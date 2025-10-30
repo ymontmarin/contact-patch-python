@@ -140,9 +140,10 @@ class ADMM:
 
             # 3. Dual update (with momentum)
             # l_kp1 = (1+beta)lk - beta lkm1 + rho (x_kp1 - y_kp1)
+            #       = lk + beta (lk - lkm1) + rho (x_kp1 - y_kp1)
             np.subtract(x_k, y_k, out=diff)
 
-            if self.dual_momentum > 0.0 and k > 0:
+            if beta > 0.0 and k > 0:
                 # l_km1-> l_kp1
                 l_kp1 *= -beta
                 l_kp1 += (1.0 + beta) * l_k

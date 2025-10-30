@@ -220,7 +220,8 @@ class ProjectedGradient:
                     )
                 )
 
-            final_crit = change or obj_val or optim_test
+            # final_crit = change or obj_val or optim_test
+            final_crit = obj_val or optim_test
 
             if final_crit:
                 if self.verbose:

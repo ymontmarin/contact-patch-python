@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Any
 import warnings
+from joblib import Parallel, delayed
 
 from contactpatch.patches import PolygonContactPatch
 
 
-MU = 2.0
-MU = 0.2
+MU = 1.
 KER_PRECOMPUTE = False
 MAX_TIME = 0.05
 MAX_ITER = 2000
@@ -24,8 +24,9 @@ class BenchmarkResult:
     solver_type: str
     config_name: str
     n_vertices: int
-    polygon_id: int
+    problem_id: int
     test_point_id: int
+    mu: float
     iterations: int
     time_seconds: float
     converged: bool
@@ -61,20 +62,27 @@ class OptimizationBenchmark:
 
     def __init__(
         self,
-        n_vertices_list: List[int],
-        n_polygons_per_size: int = 5,
+        n_vertice_min: int = 3,
+        n_vertice_max: int = 25,
+        mu_min: float = .01,
+        mu_max: float = 2.,
+        n_problems: int = 30,
         n_test_points: int = 20,
-        max_time: float = 0.05,
-        max_iter: int = 2000,
-        mu: float = 2.0,
-        ker_precompute: bool = False,
+        ker_precompute: bool = KER_PRECOMPUTE,
+        max_time: float = MAX_TIME,
+        max_iter: int = MAX_ITER,
     ):
-        self.mu = mu
+        self.n_vertice_min = n_vertice_min
+        self.n_vertice_max = n_vertice_max
+
+        self.mu_min = mu_min
+        self.mu_max = mu_max
+
+        self.n_problems = n_problems
         self.n_test_points = n_test_points
+
         self.max_time = max_time
         self.max_iter = max_iter
-        self.n_polygons_per_size = n_polygons_per_size
-        self.n_vertices_list = n_vertices_list
         self.ker_precompute = ker_precompute
 
         self.generate_test_problems()
@@ -84,6 +92,7 @@ class OptimizationBenchmark:
     def generate_test_problems(self):
         """Generate test polygons and points"""
 
+        print("Generating test points...")
         self.test_points = []
         for point_id in range(self.n_test_points):
             fl = np.random.randn(6)
@@ -91,16 +100,23 @@ class OptimizationBenchmark:
             fl = fl / (np.linalg.norm(fl) + 1e-10) * scale
             self.test_points.append(fl)
 
-        self.test_problems = []
         print("Generating test problems...")
-        for n_vertices in self.n_vertices_list:
-            for poly_id in range(self.n_polygons_per_size):
-                vis = PolygonContactPatch.generate_polygon_vis(
-                    N_sample=50 * n_vertices, aimed_n=n_vertices
-                )
-                self.test_problems.append(
-                    {"n_vertices": n_vertices, "poly_id": poly_id, "vis": vis}
-                )
+        n_vertices_list = np.random.randint(self.n_vertice_min, self.n_vertice_max, size=self.n_problems)
+        mu_list = np.random.uniform(self.mu_min, self.mu_max, size=self.n_problems)
+        self.test_problems = []
+        for problem_id, (n_vertices, mu) in enumerate(zip(n_vertices_list, mu_list)):
+            factor = 10
+            for i in range(5):
+                try:
+                    vis = PolygonContactPatch.generate_polygon_vis(
+                        N_sample=factor * n_vertices, aimed_n=n_vertices
+                    )
+                    break
+                except Exception:
+                    factor *= 10
+            self.test_problems.append(
+                {"problem_id": problem_id, "n_vertices": n_vertices, "mu": mu, "vis": vis}
+            )
 
         print(f"✓ Generated {len(self.test_points)} test points")
         print(f"✓ Generated {len(self.test_problems)} test problems")
@@ -199,6 +215,8 @@ class OptimizationBenchmark:
 
         elif mode == "feature_combinations":
             for accel, restart, armijo, precond in product(*[[True, False]] * 4):
+                if restart and not accel:
+                    continue
                 name_parts = ["PGD"]
                 if accel:
                     name_parts.append("fista")
@@ -228,8 +246,10 @@ class OptimizationBenchmark:
                 configs[config_name] = config
 
         elif mode == "maxi_GS":
-            for alpha in [0.5, 0.7, 0.85, 0.95, 0.99, 1.0]:
+            for alpha in [0.5, 0.8, 0.99, 1.0]:
                 for accel, restart, armijo, precond in product(*[[True, False]] * 4):
+                    if restart and not accel:
+                        continue
                     name_parts = ["PGD"]
                     if accel:
                         name_parts.append("fista")
@@ -251,12 +271,10 @@ class OptimizationBenchmark:
                     }
                     if armijo:
                         for a_iter, a_sigma, a_beta, a_fr in product(
-                            [
                                 [5, 10, 20],
                                 [0.01, 0.1, 0.5],
                                 [0.3, 0.5, 0.7],
                                 [0.5, 0.9],
-                            ]
                         ):
                             config_spe = config.copy()
                             config_spe.update(
@@ -345,7 +363,7 @@ class OptimizationBenchmark:
                 }
 
         elif mode == "momentum_sweep":
-            for beta in [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]:
+            for beta in [0.0, 0.01, 0.05, 0.1, 0.3, 0.5]:
                 configs[f"ADMM_momentum_{beta}"] = {
                     "rho_update_rule": "linear",
                     "alpha": 1.0,
@@ -384,6 +402,107 @@ class OptimizationBenchmark:
                     "rho_lin_factor": 2.0,
                 }
 
+        elif mode == "maxi_GS":
+            for alpha, dual_momentum, prox, rho_update_rule in product(
+                [1.0, 1.3, 1.6, 1.9],
+                [.0, .2, .4],
+                [.0, 1e-6, 1e-3],
+                ["constant", "linear", "osqp", "spectral"]
+            ):
+                name_parts = ["ADMM"]
+                name_parts.append(f"{rho_update_rule}")
+                name_parts.append(f"alpha_{alpha}")
+                name_parts.append(f"betra_{dual_momentum}")
+                name_parts.append(f"prox_{prox}")
+
+                config_name = "_".join(name_parts)
+                config = {
+                    "rho_update_rule": rho_update_rule,
+                    "alpha": alpha,
+                    "dual_momentum": dual_momentum,
+                    "prox": prox,
+                }
+
+                if rho_update_rule is "constant":
+                    for rho_init in [1e-1, 1, 10]:
+                        config_spe = config.copy()
+                        config_spe.update(
+                        {
+                            "rho_init": rho_init,
+                        }
+                        )
+                        config_name_spe = "_".join([
+                            config_name,
+                            f"ri_{rho_init}",
+                        ])
+                        configs[config_name_spe] = config_spe
+                else:
+                    for rho_update_ratio, rho_update_cooldown in product(
+                        [5, 10],
+                        [1, 5]
+                    ):
+                        config_spe = config.copy()
+                        config_spe.update(
+                            {
+                                    "rho_update_ratio": rho_update_ratio,
+                                    "rho_update_cooldown": rho_update_cooldown,
+                            }
+                        )
+                        config_name_spe = "_".join([
+                            config_name,
+                            f"rur_{rho_update_ratio}",
+                            f"ruc_{rho_update_cooldown}",
+                        ])
+                        if rho_update_rule is "linear":
+                            for rho_init, rho_lin_factor in product(
+                                [1e-1, 1, 10],
+                                [2, 5, 10]
+                            ):
+                                config_spe_spe = config_spe.copy()
+                                config_spe_spe.update(
+                                {
+                                    "rho_init": rho_init,
+                                    "rho_lin_factor": rho_lin_factor,
+                                }
+                                )
+                                config_name_spe_spe = "_".join([
+                                    config_name_spe,
+                                    f"ri_{rho_init}",
+                                    f"rlf_{rho_lin_factor}",
+                                ])
+                                configs[config_name_spe_spe] = config_spe_spe
+                        elif rho_update_rule is "osqp":
+                            for rho_adaptive_fraction in [.3, .5, .8]:
+                                config_spe_spe = config_spe.copy()
+                                config_spe_spe.update(
+                                {
+                                    "rho_adaptive_fraction": rho_adaptive_fraction,
+                                }
+                                )
+                                config_name_spe_spe = "_".join([
+                                    config_name_spe,
+                                    f"raf_{rho_adaptive_fraction}",
+                                ])
+                                configs[config_name_spe_spe] = config_spe_spe
+                        elif rho_update_rule is "spectral":
+                            for rho_power, rho_power_factor in product(
+                                [.1, .3, .5],
+                                [.05, .15, .3]
+                            ):
+                                config_spe_spe = config_spe.copy()
+                                config_spe_spe.update(
+                                {
+                                    "rho_power": rho_power,
+                                    "rho_power_factor": rho_power_factor,
+                                }
+                                )
+                                config_name_spe_spe = "_".join([
+                                    config_name_spe,
+                                    f"rp_{rho_power}",
+                                    f"rpf_{rho_power_factor}",
+                                ])
+                                configs[config_name_spe_spe] = config_spe_spe
+
         for name, config in configs.items():
             config.update(self.STANDARD_ADMM_CONVERGENCE)
             config.update(
@@ -404,19 +523,20 @@ class OptimizationBenchmark:
         self,
         solver_type: str,
         config_name: str,
-        vis: np.ndarray,
-        n_vertices: int,
-        poly_id: int,
-        test_point: np.ndarray,
-        test_point_id: int,
         config: Dict[str, Any],
+        n_vertices: int,
+        problem_id: int,
+        test_point_id: int,
+        test_point: np.ndarray,
+        mu: float,
+        vis: np.ndarray,
     ) -> BenchmarkResult:
         """Run a single benchmark test with error handling"""
         max_it = config["max_iterations"]
         try:
             poly = PolygonContactPatch(
                 vis=vis,
-                mu=self.mu,
+                mu=mu,
                 ker_precompute=self.ker_precompute,
                 warmstart_strat=None,
                 solver_tyep=solver_type,
@@ -426,11 +546,11 @@ class OptimizationBenchmark:
             history = []
             start_time = time.perf_counter()
             projected = poly.project_cone(test_point, strict=False, history=history)
-            elapsed = time.perf_counter() - start_time
+            converged = len(history) < max_it
+            elapsed = time.perf_counter() - start_time if converged else self.max_time
 
             iterations = len(history)
             final_obj = 0.0 if not history else float(history[-1][1])
-            converged = len(history) < max_it
         except Exception as e:
             warnings.warn(f"Error in {solver_type}/{config_name}: {str(e)[:100]}")
             elapsed = self.max_time
@@ -442,8 +562,9 @@ class OptimizationBenchmark:
             solver_type=solver_type,
             config_name=config_name,
             n_vertices=n_vertices,
-            polygon_id=poly_id,
+            problem_id=problem_id,
             test_point_id=test_point_id,
+            mu=mu,
             iterations=iterations,
             time_seconds=elapsed,
             converged=converged,
@@ -452,9 +573,20 @@ class OptimizationBenchmark:
         )
 
     def run_benchmark_suite(
-        self, pgd_modes: List[str] = ["baseline"], admm_modes: List[str] = ["baseline"]
+        self,
+        pgd_modes: List[str] = ["baseline"],
+        admm_modes: List[str] = ["baseline"],
+        n_jobs: int = -1,
+        verbose: int = 10,
     ):
-        """Run benchmark with specified configuration modes"""
+        """Run benchmark with specified configuration modes using parallel execution
+
+        Args:
+            pgd_modes: List of PGD configuration modes to test
+            admm_modes: List of ADMM configuration modes to test
+            n_jobs: Number of parallel jobs (-1 uses all cores, 1 disables parallelism)
+            verbose: Verbosity level for joblib progress (0=silent, 10=progress bar)
+        """
 
         all_configs = {}
 
@@ -468,7 +600,7 @@ class OptimizationBenchmark:
             for name, config in configs.items():
                 all_configs[("ADMM", name)] = config
 
-        total_runs = len(all_configs) * len(self.test_problems) * self.n_test_points
+        total_runs = len(all_configs) * self.n_problems * self.n_test_points
 
         print(f"\n{'=' * 70}")
         print("HYPERPARAMETER BENCHMARK SUITE")
@@ -485,34 +617,34 @@ class OptimizationBenchmark:
         print(f"Total test problems: {len(self.test_problems)}")
         print(f"Test points per problem: {self.n_test_points}")
         print(f"Total runs: {total_runs}")
+        print(f"Parallel jobs: {n_jobs if n_jobs != -1 else 'all cores'}")
         print(f"{'=' * 70}\n")
 
-        run_count = 0
-        last_percent = 0
-
+        # Build list of all benchmark tasks
+        benchmark_tasks = []
         for (solver_type, config_name), hyperparams in all_configs.items():
-            print(f"\n[{solver_type}] {config_name}")
-
             for problem in self.test_problems:
                 for point_id, test_point in enumerate(self.test_points):
-                    result = self.run_single_benchmark(
-                        solver_type=solver_type,
-                        config_name=config_name,
-                        vis=problem["vis"],
-                        n_vertices=problem["n_vertices"],
-                        poly_id=problem["poly_id"],
-                        test_point=test_point,
-                        test_point_id=point_id,
-                        config=hyperparams,
-                    )
+                    benchmark_tasks.append({
+                        "solver_type": solver_type,
+                        "config_name": config_name,
+                        "config": hyperparams,
+                        "n_vertices": problem["n_vertices"],
+                        "problem_id": problem["problem_id"],
+                        "test_point_id": point_id,
+                        "test_point": test_point,
+                        "mu": problem["mu"],
+                        "vis": problem["vis"],
+                    })
 
-                    self.results.append(result)
-                    run_count += 1
+        # Run benchmarks in parallel
+        print(f"Running {len(benchmark_tasks)} benchmarks in parallel...")
+        results = Parallel(n_jobs=n_jobs, verbose=verbose)(
+            delayed(self.run_single_benchmark)(**task) for task in benchmark_tasks
+        )
 
-                    percent = int(100 * run_count / total_runs)
-                    if percent > last_percent and percent % 5 == 0:
-                        print(f"  Progress: {percent}% ({run_count}/{total_runs})")
-                        last_percent = percent
+        # Store results
+        self.results.extend(results)
 
         print(f"\n{'=' * 70}")
         print(f"✓ Benchmark complete! {len(self.results)} results collected.")
@@ -668,15 +800,15 @@ class OptimizationBenchmark:
         # 4. By specific polygon
         print("\n" + "-" * 70)
         print("MOST PROBLEMATIC POLYGONS (top 10):")
-        poly_failures = failed.groupby(["n_vertices", "polygon_id"]).size()
-        poly_totals = df.groupby(["n_vertices", "polygon_id"]).size()
+        poly_failures = failed.groupby(["n_vertices", "problem_id"]).size()
+        poly_totals = df.groupby(["n_vertices", "problem_id"]).size()
         poly_rates = (poly_failures / poly_totals * 100).sort_values(ascending=False)
 
-        for (n, poly_id), rate in poly_rates.head(min(5, len(poly_failures))).items():
-            count = poly_failures[(n, poly_id)]
-            total = poly_totals[(n, poly_id)]
+        for (n, pb_id), rate in poly_rates.head(min(5, len(poly_failures))).items():
+            count = poly_failures[(n, pb_id)]
+            total = poly_totals[(n, pb_id)]
             print(
-                f"  n_vertices={n:2d}, poly_id={poly_id:2d}: {count:3d} / {total:3d} ({rate:5.2f}%)"
+                f"  n_vertices={n:2d}, problem_id={pb_id:2d}: {count:3d} / {total:3d} ({rate:5.2f}%)"
             )
 
         # Check if failures are concentrated
@@ -878,32 +1010,6 @@ class OptimizationBenchmark:
                 ax.set_title("Final Objective: Success vs Failed")
                 ax.grid(axis="y", alpha=0.3)
 
-        # 5. Heatmap of failures by polygon
-        ax = axes[1, 1]
-
-        # Create failure matrix
-        n_vertices_list = sorted(df["n_vertices"].unique())
-        max_poly_id = df["polygon_id"].max() + 1
-
-        failure_matrix = np.zeros((len(n_vertices_list), max_poly_id))
-
-        for i, n in enumerate(n_vertices_list):
-            for poly_id in range(max_poly_id):
-                subset = df[(df["n_vertices"] == n) & (df["polygon_id"] == poly_id)]
-                if len(subset) > 0:
-                    failure_matrix[i, poly_id] = (
-                        100 * (~subset["converged"]).sum() / len(subset)
-                    )
-
-        im = ax.imshow(
-            failure_matrix, aspect="auto", cmap="YlOrRd", interpolation="nearest"
-        )
-        ax.set_xlabel("Polygon ID")
-        ax.set_ylabel("N_vertices")
-        ax.set_yticks(range(len(n_vertices_list)))
-        ax.set_yticklabels(n_vertices_list)
-        ax.set_title("Failure Rate by Polygon (%)")
-        plt.colorbar(im, ax=ax, label="Failure Rate (%)")
 
         # 6. Time distribution: failed vs success
         ax = axes[1, 2]
@@ -1211,18 +1317,18 @@ class OptimizationBenchmark:
         examples = []
 
         # Group by n_vertices and polygon_id to get diversity
-        failure_groups = failed.groupby(["n_vertices", "polygon_id"])
+        failure_groups = failed.groupby(["n_vertices", "problem_id"])
 
         selected_groups = []
-        for (n_vertices, poly_id), group in failure_groups:
+        for (n_vertices, pb_id), group in failure_groups:
             if len(group) > 0:
-                selected_groups.append((n_vertices, poly_id, group))
+                selected_groups.append((n_vertices, pb_id, group))
 
         # Sort by failure count (most problematic first)
         selected_groups.sort(key=lambda x: len(x[2]), reverse=True)
 
         # Select n_examples from different groups
-        for idx, (n_vertices, poly_id, group) in enumerate(
+        for idx, (n_vertices, pb_id, group) in enumerate(
             selected_groups[:n_examples]
         ):
             # Pick one failure case from this group
@@ -1233,7 +1339,7 @@ class OptimizationBenchmark:
             for problem in self.test_problems:
                 if (
                     problem["n_vertices"] == n_vertices
-                    and problem["poly_id"] == poly_id
+                    and problem["problem_id"] == pb_id
                 ):
                     test_problem = problem
                     break
@@ -1254,13 +1360,13 @@ class OptimizationBenchmark:
             example = {
                 "example_id": idx + 1,
                 "n_vertices": n_vertices,
-                "polygon_id": poly_id,
+                "problem_id": pb_id,
                 "test_point_id": test_point_id,
                 "config_name": failure_case["config_name"],
                 "iterations": failure_case["iterations"],
                 "final_objective": failure_case["final_objective"],
                 "vis": test_problem["vis"].copy(),
-                "mu": self.mu,
+                "mu": test_problem["mu"],
                 "ker_precompute": self.ker_precompute,
                 "solver_type": failure_case["solver_type"],
                 "solver_kwargs": config,
@@ -1274,7 +1380,7 @@ class OptimizationBenchmark:
             print(f"FAILURE EXAMPLE #{idx + 1}")
             print(f"{'=' * 70}")
             print(f"Problem Size:     n_vertices = {n_vertices}")
-            print(f"Polygon ID:       {poly_id}")
+            print(f"Polygon ID:       {pb_id}")
             print(f"Test Point ID:    {test_point_id}")
             print(f"Solver:           {failure_case['solver_type']}")
             print(f"Configuration:    {failure_case['config_name']}")
@@ -1329,7 +1435,7 @@ class OptimizationBenchmark:
             print(f"# {'=' * 66}")
             print(f"# FAILURE EXAMPLE #{ex['example_id']}")
             print(f"# {ex['solver_type']} - {ex['config_name']}")
-            print(f"# n_vertices={ex['n_vertices']}, poly_id={ex['polygon_id']}")
+            print(f"# n_vertices={ex['n_vertices']}, problem_id={ex['problem_id']}")
             print(f"# {'=' * 66}")
             print()
 
@@ -1355,7 +1461,7 @@ class OptimizationBenchmark:
 
             # Print test code
             print("# Test this case:")
-            print(f"mu = {self.mu}")
+            print(f"mu = {ex['mu']}")
             print(f"ker_precompute = {self.ker_precompute}")
             print(f"poly_{ex['example_id']} = PolygonContactPatch(")
             print(f"    vis=vis_{ex['example_id']},")
@@ -1462,7 +1568,7 @@ class OptimizationBenchmark:
             # Add title with info
             ax.set_title(
                 f"Failure #{ex['example_id']}: n={ex['n_vertices']}, "
-                f"poly_id={ex['polygon_id']}\n"
+                f"problem_id={ex['problem_id']}\n"
                 f"{ex['solver_type']} - {ex['iterations']} iter\n"
                 f"||f||={np.linalg.norm(test_point[:3]):.2f}, "
                 f"||τ||={np.linalg.norm(test_point[3:]):.2f}",
@@ -1576,39 +1682,71 @@ class OptimizationBenchmark:
 # ====================================================================================
 
 
-def run_quick_test():
+def run_quick_test(
+    n_vertice_min: int = 3,
+    n_vertice_max: int = 5,
+    mu_min: float = MU,
+    mu_max: float = MU,
+    n_problems: int = 10,
+    n_test_points: int = 5,
+    ker_precompute: bool = KER_PRECOMPUTE,
+    max_time: float = MAX_TIME,
+    max_iter: int = MAX_ITER,
+    n_jobs: int = -1,
+    verbose: int = 10,
+):
     """Quick test (~2-3 minutes)"""
     print("Running quick test...")
     benchmark = OptimizationBenchmark(
-        n_vertices_list=[3, 5],
-        mu=MU,
-        ker_precompute=KER_PRECOMPUTE,
-        max_time=MAX_TIME,
-        max_iter=MAX_ITER,
-        n_test_points=5,
-        n_polygons_per_size=2,
+        n_vertice_min=n_vertice_min,
+        n_vertice_max=n_vertice_max,
+        mu_min=mu_min,
+        mu_max=mu_max,
+        n_problems=n_problems,
+        n_test_points=n_test_points,
+        ker_precompute=ker_precompute,
+        max_time=max_time,
+        max_iter=max_iter,
     )
-    benchmark.run_benchmark_suite(pgd_modes=["baseline"], admm_modes=["baseline"])
+    benchmark.run_benchmark_suite(
+        pgd_modes=["baseline"], admm_modes=["baseline"], n_jobs=n_jobs, verbose=verbose
+    )
     df = benchmark.get_results_dataframe()
     benchmark.generate_full_report(df, save_prefix="quick_test")
     return benchmark, df
 
 
-def run_standard_benchmark():
+def run_standard_benchmark(
+    n_vertice_min: int = 3,
+    n_vertice_max: int = 15,
+    mu_min: float = .1,
+    mu_max: float = 2.,
+    n_problems: int = 20,
+    n_test_points: int = 10,
+    ker_precompute: bool = KER_PRECOMPUTE,
+    max_time: float = MAX_TIME,
+    max_iter: int = MAX_ITER,
+    n_jobs: int = -1,
+    verbose: int = 10,
+):
     """Standard hyperparameter benchmark (~20-30 minutes)"""
     benchmark = OptimizationBenchmark(
-        n_vertices_list=[3, 5, 10],
-        mu=MU,
-        ker_precompute=KER_PRECOMPUTE,
-        max_time=MAX_TIME,
-        max_iter=MAX_ITER,
-        n_test_points=20,
-        n_polygons_per_size=5,
+        n_vertice_min=n_vertice_min,
+        n_vertice_max=n_vertice_max,
+        mu_min=mu_min,
+        mu_max=mu_max,
+        n_problems=n_problems,
+        n_test_points=n_test_points,
+        ker_precompute=ker_precompute,
+        max_time=max_time,
+        max_iter=max_iter,
     )
 
     benchmark.run_benchmark_suite(
         pgd_modes=["baseline", "alpha_sweep", "feature_combinations"],
         admm_modes=["baseline", "rho_init_sweep", "alpha_sweep", "momentum_sweep"],
+        n_jobs=n_jobs,
+        verbose=verbose,
     )
 
     df = benchmark.get_results_dataframe()
@@ -1617,16 +1755,30 @@ def run_standard_benchmark():
     return benchmark, df
 
 
-def run_extensive_benchmark():
+def run_extensive_benchmark(
+    n_vertice_min: int = 3,
+    n_vertice_max: int = 25,
+    mu_min: float = .05,
+    mu_max: float = 2.,
+    n_problems: int = 30,
+    n_test_points: int = 20,
+    ker_precompute: bool = KER_PRECOMPUTE,
+    max_time: float = MAX_TIME,
+    max_iter: int = MAX_ITER,
+    n_jobs: int = -1,
+    verbose: int = 10,
+):
     """Extensive hyperparameter sweep (~2-4 hours)"""
     benchmark = OptimizationBenchmark(
-        n_vertices_list=[3, 5, 10, 15],
-        mu=MU,
-        ker_precompute=KER_PRECOMPUTE,
-        max_time=MAX_TIME,
-        max_iter=MAX_ITER,
-        n_test_points=30,
-        n_polygons_per_size=8,
+        n_vertice_min=n_vertice_min,
+        n_vertice_max=n_vertice_max,
+        mu_min=mu_min,
+        mu_max=mu_max,
+        n_problems=n_problems,
+        n_test_points=n_test_points,
+        ker_precompute=ker_precompute,
+        max_time=max_time,
+        max_iter=max_iter,
     )
 
     benchmark.run_benchmark_suite(
@@ -1646,6 +1798,8 @@ def run_extensive_benchmark():
             "osqp_fraction_sweep",
             "combined_best",
         ],
+        n_jobs=n_jobs,
+        verbose=verbose,
     )
 
     df = benchmark.get_results_dataframe()
@@ -1654,22 +1808,202 @@ def run_extensive_benchmark():
     return benchmark, df
 
 
-def run_gridsearch_benchmark():
+def run_gridsearch_benchmark(
+    n_vertice_min: int = 3,
+    n_vertice_max: int = 25,
+    mu_min: float = .05,
+    mu_max: float = 2.,
+    n_problems: int = 15,
+    n_test_points: int = 10,
+    ker_precompute: bool = KER_PRECOMPUTE,
+    max_time: float = MAX_TIME,
+    max_iter: int = MAX_ITER,
+    n_jobs: int = -1,
+    verbose: int = 10,
+):
     """Extensive hyperparameter sweep (~2-4 hours)"""
     benchmark = OptimizationBenchmark(
-        n_vertices_list=[3, 5, 10],
-        mu=MU,
-        ker_precompute=KER_PRECOMPUTE,
-        max_time=MAX_TIME,
-        max_iter=MAX_ITER,
-        n_test_points=10,
-        n_polygons_per_size=5,
+        n_vertice_min=n_vertice_min,
+        n_vertice_max=n_vertice_max,
+        mu_min=mu_min,
+        mu_max=mu_max,
+        n_problems=n_problems,
+        n_test_points=n_test_points,
+        ker_precompute=ker_precompute,
+        max_time=max_time,
+        max_iter=max_iter,
     )
 
-    benchmark.run_benchmark_suite(pgd_modes=["maxi_GS"], admm_modes=["baseline"])
+    benchmark.run_benchmark_suite(
+        pgd_modes=["maxi_GS"], admm_modes=["maxi_GS"], n_jobs=n_jobs, verbose=verbose
+    )
 
     df = benchmark.get_results_dataframe()
     benchmark.generate_full_report(df, save_prefix="gridsearch")
+
+    return benchmark, df
+
+
+# ====================================================================================
+# COMMAND LINE INTERFACE
+# ====================================================================================
+
+
+def main():
+    """Command-line interface for running benchmarks"""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Run solver benchmarks with configurable parameters",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run quick test with default parameters
+  python solvers_bench.py --benchmark quick
+
+  # Run standard benchmark with custom mu range and max_iter
+  python solvers_bench.py --benchmark standard --mu-min 0.1 --mu-max 1.5 --max-iter 5000
+
+  # Run extensive benchmark with precomputed kernel and custom vertex range
+  python solvers_bench.py --benchmark extensive --ker-precompute --n-vertice-min 5 --n-vertice-max 30
+
+  # Run gridsearch with custom test points and problems, using 4 parallel jobs
+  python solvers_bench.py --benchmark gridsearch --n-test-points 20 --n-problems 25 --n-jobs 4
+
+  # Run quick test without parallelism (single-threaded)
+  python solvers_bench.py --benchmark quick --n-jobs 1
+        """,
+    )
+
+    # Benchmark selection
+    parser.add_argument(
+        "--benchmark",
+        type=str,
+        choices=["quick", "standard", "extensive", "gridsearch"],
+        default="gridsearch",
+        help="Which benchmark to run (default: gridsearch)",
+    )
+
+    # Parameter overrides
+    parser.add_argument(
+        "--n-vertice-min",
+        type=int,
+        default=None,
+        help="Minimum number of vertices (default: varies by benchmark)",
+    )
+
+    parser.add_argument(
+        "--n-vertice-max",
+        type=int,
+        default=None,
+        help="Maximum number of vertices (default: varies by benchmark)",
+    )
+
+    parser.add_argument(
+        "--mu-min",
+        type=float,
+        default=None,
+        help="Minimum friction coefficient (default: varies by benchmark)",
+    )
+
+    parser.add_argument(
+        "--mu-max",
+        type=float,
+        default=None,
+        help="Maximum friction coefficient (default: varies by benchmark)",
+    )
+
+    parser.add_argument(
+        "--n-problems",
+        type=int,
+        default=None,
+        help="Number of problems to test (default: varies by benchmark)",
+    )
+
+    parser.add_argument(
+        "--n-test-points",
+        type=int,
+        default=None,
+        help="Number of test points (default: varies by benchmark)",
+    )
+
+    parser.add_argument(
+        "--ker-precompute",
+        action="store_true",
+        default=KER_PRECOMPUTE,
+        help=f"Precompute kernel (default: {KER_PRECOMPUTE})",
+    )
+
+    parser.add_argument(
+        "--max-time",
+        type=float,
+        default=MAX_TIME,
+        help=f"Maximum time per solver call in seconds (default: {MAX_TIME})",
+    )
+
+    parser.add_argument(
+        "--max-iter",
+        type=int,
+        default=MAX_ITER,
+        help=f"Maximum iterations per solver call (default: {MAX_ITER})",
+    )
+
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=-1,
+        help="Number of parallel jobs for benchmark execution (-1 uses all cores, 1 disables parallelism, default: -1)",
+    )
+
+    parser.add_argument(
+        "--verbose",
+        type=int,
+        default=10,
+        help="Verbosity level for parallel execution (0=silent, 10=progress bar, default: 10)",
+    )
+
+    args = parser.parse_args()
+
+    # Prepare common kwargs - only include parameters that were explicitly provided
+    kwargs = {
+        "ker_precompute": args.ker_precompute,
+        "max_time": args.max_time,
+        "max_iter": args.max_iter,
+        "n_jobs": args.n_jobs,
+        "verbose": args.verbose,
+    }
+
+    # Add optional parameters if provided
+    if args.n_vertice_min is not None:
+        kwargs["n_vertice_min"] = args.n_vertice_min
+    if args.n_vertice_max is not None:
+        kwargs["n_vertice_max"] = args.n_vertice_max
+    if args.mu_min is not None:
+        kwargs["mu_min"] = args.mu_min
+    if args.mu_max is not None:
+        kwargs["mu_max"] = args.mu_max
+    if args.n_problems is not None:
+        kwargs["n_problems"] = args.n_problems
+    if args.n_test_points is not None:
+        kwargs["n_test_points"] = args.n_test_points
+
+    # Run selected benchmark
+    print(f"\n{'=' * 70}")
+    print(f"Running {args.benchmark.upper()} benchmark")
+    print(f"{'=' * 70}")
+    print("Parameters:")
+    for key, value in kwargs.items():
+        print(f"  {key}: {value}")
+    print(f"{'=' * 70}\n")
+
+    if args.benchmark == "quick":
+        benchmark, df = run_quick_test(**kwargs)
+    elif args.benchmark == "standard":
+        benchmark, df = run_standard_benchmark(**kwargs)
+    elif args.benchmark == "extensive":
+        benchmark, df = run_extensive_benchmark(**kwargs)
+    elif args.benchmark == "gridsearch":
+        benchmark, df = run_gridsearch_benchmark(**kwargs)
 
     return benchmark, df
 
@@ -1679,16 +2013,4 @@ def run_gridsearch_benchmark():
 # ====================================================================================
 
 if __name__ == "__main__":
-    # Choose one:
-
-    # 1. Quick test (2-3 minutes) - to verify everything works
-    # benchmark, df = run_quick_test()
-
-    # 2. Standard benchmark (20-30 minutes) - good balance
-    # benchmark, df = run_standard_benchmark()
-
-    # 3. Extensive benchmark (2-4 hours) - comprehensive analysis
-    # benchmark, df = run_extensive_benchmark()
-
-    # 4. Grid search
-    benchmark, df = run_extensive_benchmark()
+    benchmark, df = main()
