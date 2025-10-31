@@ -73,6 +73,8 @@ class ProjectedGradient:
         d_k = np.zeros(self.patch.hidden_shape)
         dx_k = np.zeros(self.patch.hidden_shape)
         x_kp1 = np.zeros(self.patch.hidden_shape)
+        optim_hs_tmp = np.zeros(self.patch.hidden_shape)
+        optim_s_tmp = np.zeros(self.patch.n)
 
         residual = np.zeros(self.patch.n)
 
@@ -100,7 +102,7 @@ class ProjectedGradient:
             self.patch.apply_A(y_k, _out=residual)
             residual -= l
 
-            obj_k = 0.5 * np.dot(residual, residual)
+            obj_k = 0.5 * np.sum(residual * residual)
             self.patch.apply_AT(residual, _out=g_k)
 
             # Gradient is:
@@ -135,18 +137,18 @@ class ProjectedGradient:
                     # New residual and objective
                     self.patch.apply_A(x_kp1, _out=residual_trial)
                     residual_trial -= l
-                    obj_trial = 0.5 * np.dot(residual_trial, residual_trial)
+                    obj_trial = 0.5 * np.sum(residual_trial * residual_trial)
 
                     # Armijo condition
                     if self.accel:
-                        armijo_crit = obj_trial <= obj_k + np.dot(
-                            g_k.flatten(), dx_trial.flatten()
-                        ) + (1 / (2 * alpha)) * np.dot(
-                            dx_trial.flatten(), dx_trial.flatten()
+                        armijo_crit = obj_trial <= obj_k + np.sum(
+                            g_k * dx_trial
+                        ) + (1 / (2 * alpha)) * np.sum(
+                            dx_trial * dx_trial
                         )
                     else:
-                        armijo_crit = obj_trial <= obj_k + self.armijo_sigma * np.dot(
-                            g_k.flatten(), dx_trial.flatten()
+                        armijo_crit = obj_trial <= obj_k + self.armijo_sigma * np.sum(
+                            g_k * dx_trial
                         )
                     if armijo_crit:
                         success = True
@@ -179,20 +181,14 @@ class ProjectedGradient:
                 else 1.0
             )
 
-            # TODO: Optimize
-            optim_crit_value = (
-                0.5
-                * np.linalg.norm(
-                    self.patch.apply_A(
-                        self.patch.project_hidden_cone(
-                            x_kp1
-                            - self.patch.apply_A_pinv(self.patch.apply_A(x_kp1) - l)
-                        )
-                        - x_kp1
-                    )
-                )
-                ** 2
-            )
+            self.patch.apply_A(x_kp1, _out=optim_s_tmp)
+            optim_s_tmp -= l
+            self.patch.apply_A_pinv(optim_s_tmp, _out=optim_hs_tmp)
+            optim_hs_tmp -= x_kp1
+            optim_hs_tmp *= -1
+            self.patch.project_hidden_cone_(optim_hs_tmp)
+            optim_hs_tmp -= x_kp1
+            optim_crit_value = .5 * np.sum(optim_hs_tmp * optim_hs_tmp)
 
             # Check convergence
             change = (
@@ -237,7 +233,7 @@ class ProjectedGradient:
                     or (
                         self.adaptive_restart
                         and (
-                            np.dot(dx_k.flatten(), dx_km1.flatten()) < 0
+                            np.sum(dx_k * dx_km1) < 0
                             or obj_k > obj_km1
                         )
                     )
@@ -248,8 +244,7 @@ class ProjectedGradient:
                 else:
                     # Update momentum point
                     t_kp1 = (1 + np.sqrt(1 + 4 * t_k**2)) / 2
-                    y_k[...] = dx_k
-                    y_k *= (t_k - 1) / t_kp1
+                    np.multiply(dx_k, (t_k - 1) / t_kp1, out=y_k)
                     y_k += x_kp1
                 # New variables
                 x_k, x_kp1 = x_kp1, x_k
