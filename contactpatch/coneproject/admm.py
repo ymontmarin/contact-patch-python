@@ -83,6 +83,7 @@ class ADMM:
         nu = self.prox
         beta = self.dual_momentum
         rho = self.rho_init if rho_0 is None else rho_0
+        sqrt_m = np.sqrt(self.patch.m)
 
         # Initialize l_0
         if l_0 is not None:
@@ -133,7 +134,7 @@ class ADMM:
 
             # 2. Y-update (with over rolation):
             # y_kp1 = Proj( a x_k + (1-a) y_k + l_k / rho)
-            y_k[...] = alpha * x_k
+            np.multiply(x_k, alpha, out=y_k)
             y_k += (1 - alpha) * y_km1
             y_k += l_k / rho
             self.patch.project_hidden_cone_(y_k)
@@ -151,18 +152,19 @@ class ADMM:
 
             # 4. Convergence check
             primal_residual = np.linalg.norm(diff)
-            dual_residual = rho * np.linalg.norm(y_k - y_km1)
+            np.subtract(y_k, y_km1, out=diff)
+            dual_residual = rho * np.linalg.norm(diff)
 
-            eps_primal = np.sqrt(self.patch.m) * self.abs_crit + self.rel_crit * max(
-                np.linalg.norm(x_k), np.linalg.norm(y_k)
+            eps_primal = sqrt_m * self.abs_crit + self.rel_crit * max(
+                np.sqrt(np.sum(x_k * x_k)), np.sqrt(np.sum(y_k * y_k))
             )
-            eps_dual = np.sqrt(
-                self.patch.m
-            ) * self.abs_crit + self.rel_crit * np.linalg.norm(l_k)
+            eps_dual = sqrt_m * self.abs_crit + self.rel_crit * np.sqrt(
+                np.sum(l_k * l_k)
+            )
 
             self.patch.apply_A(y_k, _out=obj_residual)
             obj_residual -= l
-            obj_k = 0.5 * np.dot(obj_residual, obj_residual)
+            obj_k = 0.5 * np.sum(obj_residual * obj_residual)
 
             admm_converged = primal_residual < eps_primal and dual_residual < eps_dual
             obj_near_0 = obj_k < self.abs_obj_crit
