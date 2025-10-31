@@ -141,11 +141,9 @@ class ProjectedGradient:
 
                     # Armijo condition
                     if self.accel:
-                        armijo_crit = obj_trial <= obj_k + np.sum(
-                            g_k * dx_trial
-                        ) + (1 / (2 * alpha)) * np.sum(
-                            dx_trial * dx_trial
-                        )
+                        armijo_crit = obj_trial <= obj_k + np.sum(g_k * dx_trial) + (
+                            1 / (2 * alpha)
+                        ) * np.sum(dx_trial * dx_trial)
                     else:
                         armijo_crit = obj_trial <= obj_k + self.armijo_sigma * np.sum(
                             g_k * dx_trial
@@ -188,7 +186,7 @@ class ProjectedGradient:
             optim_hs_tmp *= -1
             self.patch.project_hidden_cone_(optim_hs_tmp)
             optim_hs_tmp -= x_kp1
-            optim_crit_value = .5 * np.sum(optim_hs_tmp * optim_hs_tmp)
+            optim_crit_value = 0.5 * np.sum(optim_hs_tmp * optim_hs_tmp)
 
             # Check convergence
             change = (
@@ -232,10 +230,7 @@ class ProjectedGradient:
                     force_restart
                     or (
                         self.adaptive_restart
-                        and (
-                            np.sum(dx_k * dx_km1) < 0
-                            or obj_k > obj_km1
-                        )
+                        and (np.sum(dx_k * dx_km1) < 0 or obj_k > obj_km1)
                     )
                 ):
                     # Restart moment
