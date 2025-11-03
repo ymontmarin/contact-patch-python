@@ -194,31 +194,12 @@ def test_polygon_hidden_projection():
 def test_projection_with_pgs():
     vis = PolygonContactPatch.generate_polygon_vis(N_sample=10, aimed_n=4)
     mu = 2.0
-    solver_kwargs = {
-        "max_iterations": 2000,
-        "accel": True,
-        "precond": True,
-        "adaptive_restart": True,
-        "armijo": True,
-        "armijo_iter": 20,
-        "armijo_sigma": 0.1,
-        "armijo_beta": 0.5,
-        "armijo_force_restart": 0.8,
-        "rel_crit": 1e-6,
-        "abs_crit": 1e-8,
-        "rel_obj_crit": 1e-6,
-        "abs_obj_crit": 1e-12,
-        "optim_crit": 1e-12,
-        "alpha": 1.0,
-        "verbose": True,
-    }
     poly = PolygonContactPatch(
         vis=vis,
         mu=mu,
         ker_precompute=False,
         warmstart_strat=None,
         solver_tyep="PGD",
-        solver_kwargs=solver_kwargs,
     )
 
     fl = poly.generate_point_in_cone_space()
@@ -232,33 +213,12 @@ def test_projection_with_pgs():
 def test_projection_with_admm():
     vis = PolygonContactPatch.generate_polygon_vis(N_sample=10, aimed_n=4)
     mu = 2.0
-    solver_kwargs = {
-        "max_iterations": 2000,
-        "rel_crit": 1e-4,
-        "abs_crit": 1e-5,
-        "abs_obj_crit": 1e-12,
-        "min_residual_threshold": 1e-8,
-        "rho_clip": 1e6,
-        "prox": 1e-6,
-        "alpha": 1.1,
-        "rho_init": 1e-1,
-        "rho_power": 0.3,
-        "rho_power_factor": 0.15,
-        "rho_lin_factor": 2.0,
-        "rho_update_ratio": 10.0,
-        "rho_update_cooldown": 5,
-        "rho_adaptive_fraction": 0.4,
-        "rho_update_rule": "osqp",
-        "dual_momentum": 0.1,
-        "verbose": True,
-    }
     poly = PolygonContactPatch(
         vis=vis,
         mu=mu,
         ker_precompute=False,
         warmstart_strat=None,
         solver_tyep="ADMM",
-        solver_kwargs=solver_kwargs,
     )
 
     fl = poly.generate_point_in_cone_space()
