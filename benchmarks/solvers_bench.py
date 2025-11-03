@@ -55,8 +55,8 @@ class OptimizationBenchmark:
     }
 
     STANDARD_ADMM_CONVERGENCE = {
-        "rel_crit": 1e-4,
-        "abs_crit": 1e-5,
+        "rel_crit": 1e-5,
+        "abs_crit": 1e-6,
         "abs_obj_crit": 1e-12,
     }
 
