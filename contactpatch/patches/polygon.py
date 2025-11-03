@@ -12,8 +12,8 @@ class PolygonContactPatch:
         vis,
         mu,
         ker_precompute=False,
-        warmstart_strat=None,
-        solver_tyep="PGD",
+        warmstart_strat="prev_linadjust",
+        solver_tyep="ADMM",
         solver_kwargs=None,
     ):
         """
