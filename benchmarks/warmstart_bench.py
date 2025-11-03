@@ -7,7 +7,7 @@ import warnings
 from joblib import Parallel, delayed
 
 from contactpatch.patches import PolygonContactPatch
-from benchmarks.solvers_bench import OptimizationBenchmark, BenchmarkResult
+from solvers_bench import OptimizationBenchmark, BenchmarkResult
 
 
 @dataclass
@@ -539,6 +539,65 @@ class WarmstartBenchmark(OptimizationBenchmark):
 
         return best_df
 
+    def filter_top_configs(self, df: pd.DataFrame = None, top_n: int = 5):
+        """
+        Filter dataframe to keep only top N configurations per solver.
+
+        Args:
+            df: Full results dataframe
+            top_n: Number of top configurations to keep per solver (based on median time with no warmstart)
+
+        Returns:
+            Filtered dataframe with only top configurations
+        """
+        if df is None:
+            df = self.get_warmstart_results_dataframe()
+
+        print("\n" + "=" * 70)
+        print(f"FILTERING TOP {top_n} CONFIGURATIONS PER SOLVER")
+        print("=" * 70)
+
+        # For each solver, find top N configs based on performance without warmstart
+        top_configs = []
+
+        for solver_type in df["solver_type"].unique():
+            solver_df = df[df["solver_type"] == solver_type]
+
+            # Use only "none" warmstart to rank configs
+            baseline_df = solver_df[solver_df["warmstart_strategy"] == "none"]
+
+            if len(baseline_df) == 0:
+                print(f"\nWarning: No 'none' warmstart data for {solver_type}, using all data")
+                baseline_df = solver_df
+
+            # Rank configs by median time
+            config_performance = baseline_df.groupby("config_name").agg({
+                "time_ms": "median",
+                "iterations": "median",
+                "converged": lambda x: 100 * x.mean(),
+            }).sort_values("time_ms")
+
+            top_config_names = config_performance.head(top_n).index.tolist()
+
+            print(f"\n{solver_type} - Top {top_n} configurations:")
+            for i, config_name in enumerate(top_config_names, 1):
+                stats = config_performance.loc[config_name]
+                print(f"  {i}. {config_name}")
+                print(f"     Time: {stats['time_ms']:.3f} ms, Iter: {stats['iterations']:.1f}, Conv: {stats['converged']:.1f}%")
+
+            top_configs.extend([(solver_type, cn) for cn in top_config_names])
+
+        # Filter dataframe
+        mask = df.apply(lambda row: (row['solver_type'], row['config_name']) in top_configs, axis=1)
+        filtered_df = df[mask].copy()
+
+        print(f"\n{'=' * 70}")
+        print(f"Filtered from {len(df)} to {len(filtered_df)} results")
+        print(f"Kept {len(top_configs)} configurations out of {df['config_name'].nunique()}")
+        print(f"{'=' * 70}")
+
+        return filtered_df
+
     def analyze_warmstart_by_position(self, df: pd.DataFrame = None):
         """Analyze how warmstart effectiveness varies with position in sequence"""
         if df is None:
@@ -621,9 +680,16 @@ class WarmstartBenchmark(OptimizationBenchmark):
         plt.show()
 
     def generate_warmstart_report(
-        self, df: pd.DataFrame = None, save_prefix: str = "warmstart_bench"
+        self, df: pd.DataFrame = None, save_prefix: str = "warmstart_bench", top_n: int = 5
     ):
-        """Generate complete warmstart analysis report"""
+        """
+        Generate complete warmstart analysis report.
+
+        Args:
+            df: Results dataframe
+            save_prefix: Prefix for saved files
+            top_n: Number of top configurations to analyze in detail (per solver)
+        """
         if df is None:
             df = self.get_warmstart_results_dataframe()
 
@@ -631,38 +697,68 @@ class WarmstartBenchmark(OptimizationBenchmark):
         print("GENERATING WARMSTART BENCHMARK REPORT")
         print("=" * 70)
 
-        # 1. Overall effectiveness
-        print("\n[1/5] Analyzing overall warmstart effectiveness...")
+        # 1. Overall effectiveness (all configs)
+        print("\n[1/7] Analyzing overall warmstart effectiveness (all configs)...")
         self.analyze_warmstart_effectiveness(df)
 
-        # 2. By configuration
-        print("\n[2/5] Analyzing warmstart by configuration...")
+        # 2. By configuration (all configs)
+        print("\n[2/7] Analyzing warmstart by configuration (all configs)...")
         best_df = self.analyze_warmstart_by_config(df)
 
-        # 3. By position in sequence
-        print("\n[3/5] Analyzing warmstart by sequence position...")
-        self.analyze_warmstart_by_position(df)
+        # 3. Filter to top configurations
+        print(f"\n[3/7] Filtering to top {top_n} configurations per solver...")
+        filtered_df = self.filter_top_configs(df, top_n=top_n)
 
-        # 4. Generate plots
-        print("\n[4/5] Generating comparison plots...")
-        self.plot_warmstart_comparison(df, save_prefix=save_prefix)
+        # 4. Re-analyze with top configs only
+        print(f"\n[4/7] Re-analyzing with top {top_n} configs only...")
+        print("\n" + "#" * 70)
+        print(f"# ANALYSIS WITH TOP {top_n} CONFIGURATIONS ONLY")
+        print("#" * 70)
 
-        # 5. Save results
-        print("\n[5/5] Saving results...")
-        csv_filename = f"{save_prefix}_results.csv"
+        self.analyze_warmstart_effectiveness(filtered_df)
+        best_df_filtered = self.analyze_warmstart_by_config(filtered_df)
+
+        # 5. By position in sequence
+        print(f"\n[5/7] Analyzing warmstart by sequence position (top {top_n} configs)...")
+        self.analyze_warmstart_by_position(filtered_df)
+
+        # 6. Generate plots
+        print(f"\n[6/7] Generating comparison plots...")
+        self.plot_warmstart_comparison(df, save_prefix=f"{save_prefix}_all")
+        self.plot_warmstart_comparison(filtered_df, save_prefix=f"{save_prefix}_top{top_n}")
+
+        # 7. Save results
+        print("\n[7/7] Saving results...")
+
+        # Save full results
+        csv_filename = f"{save_prefix}_results_all.csv"
         df.to_csv(csv_filename, index=False)
-        print(f"✓ Results saved to: {csv_filename}")
+        print(f"✓ All results saved to: {csv_filename}")
 
-        # Save best strategies
-        best_csv = f"{save_prefix}_best_strategies.csv"
+        # Save filtered results
+        csv_filename_filtered = f"{save_prefix}_results_top{top_n}.csv"
+        filtered_df.to_csv(csv_filename_filtered, index=False)
+        print(f"✓ Top {top_n} configs results saved to: {csv_filename_filtered}")
+
+        # Save best strategies (all)
+        best_csv = f"{save_prefix}_best_strategies_all.csv"
         best_df.to_csv(best_csv, index=False)
-        print(f"✓ Best strategies saved to: {best_csv}")
+        print(f"✓ Best strategies (all) saved to: {best_csv}")
+
+        # Save best strategies (filtered)
+        best_csv_filtered = f"{save_prefix}_best_strategies_top{top_n}.csv"
+        best_df_filtered.to_csv(best_csv_filtered, index=False)
+        print(f"✓ Best strategies (top {top_n}) saved to: {best_csv_filtered}")
 
         print("\n" + "=" * 70)
         print("WARMSTART REPORT GENERATION COMPLETE!")
         print("=" * 70)
+        print("\nKey findings:")
+        print(f"  - Analyzed {len(df)} total results across all configurations")
+        print(f"  - Focused analysis on top {top_n} configurations per solver")
+        print(f"  - Filtered analysis has {len(filtered_df)} results")
 
-        return best_df
+        return best_df, best_df_filtered, filtered_df
 
 
 # ====================================================================================
@@ -679,6 +775,7 @@ def run_quick_warmstart_test(
     n_sequences: int = 5,
     sequence_length: int = 8,
     sequence_types: List[str] = ["random_walk", "interpolation"],
+    top_n: int = 3,
     n_jobs: int = -1,
     verbose: int = 10,
 ):
@@ -704,9 +801,11 @@ def run_quick_warmstart_test(
     )
 
     df = benchmark.get_warmstart_results_dataframe()
-    best_df = benchmark.generate_warmstart_report(df, save_prefix="quick_warmstart")
+    best_all, best_top, filtered_df = benchmark.generate_warmstart_report(
+        df, save_prefix="quick_warmstart", top_n=top_n
+    )
 
-    return benchmark, df, best_df
+    return benchmark, df, best_all, best_top, filtered_df
 
 
 def run_standard_warmstart_benchmark(
@@ -718,6 +817,7 @@ def run_standard_warmstart_benchmark(
     n_sequences: int = 20,
     sequence_length: int = 15,
     sequence_types: List[str] = ["random_walk", "interpolation", "spiral", "perturbation"],
+    top_n: int = 5,
     n_jobs: int = -1,
     verbose: int = 10,
 ):
@@ -743,10 +843,53 @@ def run_standard_warmstart_benchmark(
     )
 
     df = benchmark.get_warmstart_results_dataframe()
-    best_df = benchmark.generate_warmstart_report(df, save_prefix="standard_warmstart")
+    best_all, best_top, filtered_df = benchmark.generate_warmstart_report(
+        df, save_prefix="standard_warmstart", top_n=top_n
+    )
 
-    return benchmark, df, best_df
+    return benchmark, df, best_all, best_top, filtered_df
 
+
+def run_gsbest_warmstart_benchmark(
+    n_vertice_min: int = 3,
+    n_vertice_max: int = 25,
+    mu_min: float = 0.05,
+    mu_max: float = 2.0,
+    n_problems: int = 30,
+    n_sequences: int = 20,
+    sequence_length: int = 15,
+    sequence_types: List[str] = ["random_walk", "interpolation", "spiral", "perturbation"],
+    top_n: int = 5,
+    n_jobs: int = -1,
+    verbose: int = 10,
+):
+    """Standard warmstart benchmark"""
+    print("Running standard warmstart benchmark...")
+
+    benchmark = WarmstartBenchmark(
+        n_vertice_min=n_vertice_min,
+        n_vertice_max=n_vertice_max,
+        mu_min=mu_min,
+        mu_max=mu_max,
+        n_problems=n_problems,
+        n_sequences=n_sequences,
+        sequence_length=sequence_length,
+        sequence_types=sequence_types,
+    )
+
+    benchmark.run_warmstart_benchmark_suite(
+        pgd_modes=["GS_best"],
+        admm_modes=["GS_best"],
+        n_jobs=n_jobs,
+        verbose=verbose,
+    )
+
+    df = benchmark.get_warmstart_results_dataframe()
+    best_all, best_top, filtered_df = benchmark.generate_warmstart_report(
+        df, save_prefix="gsbest_warmstart", top_n=top_n
+    )
+
+    return benchmark, df, best_all, best_top, filtered_df
 
 # ====================================================================================
 # COMMAND LINE INTERFACE
@@ -765,7 +908,7 @@ def main():
     parser.add_argument(
         "--benchmark",
         type=str,
-        choices=["quick", "standard"],
+        choices=["quick", "standard", "gsbest"],
         default="quick",
         help="Which benchmark to run (default: quick)",
     )
@@ -777,6 +920,7 @@ def main():
     parser.add_argument("--n-problems", type=int, default=None, help="Number of polygons to generate")
     parser.add_argument("--n-sequences", type=int, default=None, help="Number of point sequences")
     parser.add_argument("--sequence-length", type=int, default=None)
+    parser.add_argument("--top-n", type=int, default=None, help="Number of top configs to analyze in detail")
     parser.add_argument("--n-jobs", type=int, default=-1)
     parser.add_argument("--verbose", type=int, default=10)
 
@@ -801,14 +945,18 @@ def main():
         kwargs["n_sequences"] = args.n_sequences
     if args.sequence_length is not None:
         kwargs["sequence_length"] = args.sequence_length
+    if args.top_n is not None:
+        kwargs["top_n"] = args.top_n
 
     if args.benchmark == "quick":
-        benchmark, df, best_df = run_quick_warmstart_test(**kwargs)
-    else:
-        benchmark, df, best_df = run_standard_warmstart_benchmark(**kwargs)
+        benchmark, df, best_all, best_top, filtered_df = run_quick_warmstart_test(**kwargs)
+    elif  args.benchmark == "standard":
+        benchmark, df, best_all, best_top, filtered_df = run_standard_warmstart_benchmark(**kwargs)
+    elif  args.benchmark == "gsbest":
+        benchmark, df, best_all, best_top, filtered_df = run_gsbest_warmstart_benchmark(**kwargs)
 
-    return benchmark, df, best_df
+    return benchmark, df, best_all, best_top, filtered_df
 
 
 if __name__ == "__main__":
-    benchmark, df, best_df = main()
+    benchmark, df, best_all, best_top, filtered_df = main()

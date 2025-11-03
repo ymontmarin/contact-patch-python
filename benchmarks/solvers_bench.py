@@ -14,7 +14,7 @@ from contactpatch.patches import PolygonContactPatch
 MU = 1.0
 KER_PRECOMPUTE = False
 MAX_TIME = 0.05
-MAX_ITER = 2000
+MAX_ITER = 20000
 
 
 @dataclass
@@ -47,11 +47,11 @@ class OptimizationBenchmark:
 
     # Fixed convergence criteria for fair comparison
     STANDARD_PGD_CONVERGENCE = {
-        "rel_crit": 1e-5,
-        "abs_crit": 1e-7,
-        "rel_obj_crit": 1e-6,
+        "rel_crit": 1e-6,
+        "abs_crit": 1e-8,
+        "rel_obj_crit": 1e-7,
         "abs_obj_crit": 1e-12,
-        "optim_crit": 1e-12,
+        "optim_crit": 1e-13,
     }
 
     STANDARD_ADMM_CONVERGENCE = {
@@ -305,6 +305,20 @@ class OptimizationBenchmark:
                     else:
                         configs[config_name] = config
 
+        elif mode == "GS_best":
+            for alpha in [.9, .95, .99, 1., 1.01, 1.1]:
+                name_parts = ["PGD_fista_restart_precond"]
+                name_parts.append(f"alpha_{alpha}")
+                config_name = "_".join(name_parts)
+                config = {
+                    "accel": True,
+                    "precond": True,
+                    "adaptive_restart": False,
+                    "armijo": False,
+                    "alpha": alpha,
+                }
+                configs[config_name] = config
+
         for name, config in configs.items():
             config.update(self.STANDARD_PGD_CONVERGENCE)
             config.update(
@@ -517,6 +531,30 @@ class OptimizationBenchmark:
                                 )
                                 configs[config_name_spe_spe] = config_spe_spe
 
+        elif mode == "GS_best":
+            for alpha, dual_momentum, rho_adaptive_fraction in product(
+                [1.0, 1.1, 1.2],
+                [0.0, 0.2, 0.4],
+                [0.2, 0.3, 0.4]
+            ):
+                name_parts = ["ADMM"]
+                name_parts.append("osqp")
+                name_parts.append(f"alpha_{alpha}")
+                name_parts.append(f"beta_{dual_momentum}")
+                name_parts.append(f"gamma_{rho_adaptive_fraction}")
+
+                config_name = "_".join(name_parts)
+                config = {
+                    "rho_update_rule": "osqp",
+                    "alpha": alpha,
+                    "dual_momentum": dual_momentum,
+                    "prox": 1e-6,
+                    "rho_update_ratio": 5,
+                    "rho_update_cooldown": 1,
+                    "rho_adaptive_fraction": rho_adaptive_fraction,
+                }
+                configs[config_name] = config
+
         for name, config in configs.items():
             config.update(self.STANDARD_ADMM_CONVERGENCE)
             config.update(
@@ -552,7 +590,7 @@ class OptimizationBenchmark:
                 vis=vis,
                 mu=mu,
                 ker_precompute=self.ker_precompute,
-                warmstart_strat=None,
+                warmstart_strat="prev_linadjust",
                 solver_tyep=solver_type,
                 solver_kwargs=config,
             )
@@ -1856,6 +1894,39 @@ def run_gridsearch_benchmark(
 
     return benchmark, df
 
+def run_gsbest_benchmark(
+    n_vertice_min: int = 3,
+    n_vertice_max: int = 25,
+    mu_min: float = 0.05,
+    mu_max: float = 2.0,
+    n_problems: int = 50,
+    n_test_points: int = 50,
+    ker_precompute: bool = KER_PRECOMPUTE,
+    max_time: float = MAX_TIME,
+    max_iter: int = MAX_ITER,
+    n_jobs: int = -1,
+    verbose: int = 10,
+):
+    benchmark = OptimizationBenchmark(
+        n_vertice_min=n_vertice_min,
+        n_vertice_max=n_vertice_max,
+        mu_min=mu_min,
+        mu_max=mu_max,
+        n_problems=n_problems,
+        n_test_points=n_test_points,
+        ker_precompute=ker_precompute,
+        max_time=max_time,
+        max_iter=max_iter,
+    )
+
+    benchmark.run_benchmark_suite(
+        pgd_modes=["GS_best"], admm_modes=["GS_best"], n_jobs=n_jobs, verbose=verbose
+    )
+
+    df = benchmark.get_results_dataframe()
+    benchmark.generate_full_report(df, save_prefix="gsbest")
+
+    return benchmark, df
 
 # ====================================================================================
 # COMMAND LINE INTERFACE
@@ -1892,7 +1963,7 @@ Examples:
     parser.add_argument(
         "--benchmark",
         type=str,
-        choices=["quick", "standard", "extensive", "gridsearch"],
+        choices=["quick", "standard", "extensive", "gridsearch", "gsbest"],
         default="gridsearch",
         help="Which benchmark to run (default: gridsearch)",
     )
@@ -2017,6 +2088,8 @@ Examples:
         benchmark, df = run_extensive_benchmark(**kwargs)
     elif args.benchmark == "gridsearch":
         benchmark, df = run_gridsearch_benchmark(**kwargs)
+    elif args.benchmark == "gsbest":
+        benchmark, df = run_gsbest_benchmark(**kwargs)
 
     return benchmark, df
 
