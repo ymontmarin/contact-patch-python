@@ -10,7 +10,7 @@ class ProjectedGradient:
     def __init__(
         self,
         patch,
-        alpha=1.,
+        alpha=1.0,
         accel=True,
         precond=True,
         adaptive_restart=False,

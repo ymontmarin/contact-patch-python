@@ -46,7 +46,13 @@ class WarmstartBenchmark(OptimizationBenchmark):
     where warmstarting from previous solutions should provide speedup.
     """
 
-    WARMSTART_STRATEGIES = [None, "prev", "prev_state", "prev_linadjust", "prev_linadjust_state"]
+    WARMSTART_STRATEGIES = [
+        None,
+        "prev",
+        "prev_state",
+        "prev_linadjust",
+        "prev_linadjust_state",
+    ]
 
     def __init__(
         self,
@@ -139,11 +145,13 @@ class WarmstartBenchmark(OptimizationBenchmark):
             seq_type = np.random.choice(self.sequence_types)
 
             sequence = self._generate_sequence(seq_type, self.sequence_length)
-            self.sequences.append({
-                "sequence_id": seq_id,
-                "sequence_type": seq_type,
-                "points": sequence,
-            })
+            self.sequences.append(
+                {
+                    "sequence_id": seq_id,
+                    "sequence_type": seq_type,
+                    "points": sequence,
+                }
+            )
 
         print(f"✓ Generated {len(self.sequences)} point sequences")
 
@@ -157,7 +165,9 @@ class WarmstartBenchmark(OptimizationBenchmark):
         for seq_type in sorted(type_counts.keys()):
             print(f"    {seq_type}: {type_counts[seq_type]}")
         print(f"  Points per sequence: {self.sequence_length}")
-        print(f"  Total sequential solves: {len(self.test_problems) * len(self.sequences) * self.sequence_length}")
+        print(
+            f"  Total sequential solves: {len(self.test_problems) * len(self.sequences) * self.sequence_length}"
+        )
 
         return self
 
@@ -175,12 +185,16 @@ class WarmstartBenchmark(OptimizationBenchmark):
         if seq_type == "random_walk":
             # Random walk in wrench space
             start_point = np.random.randn(6)
-            start_point *= np.random.uniform(1.0, 10.0) / (np.linalg.norm(start_point) + 1e-10)
+            start_point *= np.random.uniform(1.0, 10.0) / (
+                np.linalg.norm(start_point) + 1e-10
+            )
 
             sequence = np.zeros((length, 6))
             sequence[0] = start_point
 
-            step_size = np.linalg.norm(start_point) * 0.1  # 10% of initial norm per step
+            step_size = (
+                np.linalg.norm(start_point) * 0.1
+            )  # 10% of initial norm per step
             for i in range(1, length):
                 step = np.random.randn(6)
                 step = step / (np.linalg.norm(step) + 1e-10) * step_size
@@ -189,10 +203,14 @@ class WarmstartBenchmark(OptimizationBenchmark):
         elif seq_type == "interpolation":
             # Linear interpolation between two random points
             start_point = np.random.randn(6)
-            start_point *= np.random.uniform(1.0, 10.0) / (np.linalg.norm(start_point) + 1e-10)
+            start_point *= np.random.uniform(1.0, 10.0) / (
+                np.linalg.norm(start_point) + 1e-10
+            )
 
             end_point = np.random.randn(6)
-            end_point *= np.random.uniform(1.0, 10.0) / (np.linalg.norm(end_point) + 1e-10)
+            end_point *= np.random.uniform(1.0, 10.0) / (
+                np.linalg.norm(end_point) + 1e-10
+            )
 
             t = np.linspace(0, 1, length)
             sequence = np.outer(1 - t, start_point) + np.outer(t, end_point)
@@ -217,14 +235,20 @@ class WarmstartBenchmark(OptimizationBenchmark):
         elif seq_type == "perturbation":
             # Small perturbations around a fixed point
             center_point = np.random.randn(6)
-            center_point *= np.random.uniform(1.0, 10.0) / (np.linalg.norm(center_point) + 1e-10)
+            center_point *= np.random.uniform(1.0, 10.0) / (
+                np.linalg.norm(center_point) + 1e-10
+            )
 
             perturbation_size = np.linalg.norm(center_point) * 0.05  # 5% perturbations
 
             sequence = np.zeros((length, 6))
             for i in range(length):
                 perturbation = np.random.randn(6)
-                perturbation = perturbation / (np.linalg.norm(perturbation) + 1e-10) * perturbation_size
+                perturbation = (
+                    perturbation
+                    / (np.linalg.norm(perturbation) + 1e-10)
+                    * perturbation_size
+                )
                 sequence[i] = center_point + perturbation
 
         else:
@@ -288,14 +312,16 @@ class WarmstartBenchmark(OptimizationBenchmark):
             for warmstart_strat in warmstart_strategies:
                 for problem in self.test_problems:
                     for sequence in self.sequences:
-                        benchmark_tasks.append({
-                            "solver_type": solver_type,
-                            "config_name": config_name,
-                            "solver_config": solver_config,
-                            "warmstart_strat": warmstart_strat,
-                            "problem": problem,
-                            "sequence": sequence,
-                        })
+                        benchmark_tasks.append(
+                            {
+                                "solver_type": solver_type,
+                                "config_name": config_name,
+                                "solver_config": solver_config,
+                                "warmstart_strat": warmstart_strat,
+                                "problem": problem,
+                                "sequence": sequence,
+                            }
+                        )
 
         # Run benchmarks in parallel
         print(f"Running {len(benchmark_tasks)} sequence benchmarks in parallel...")
@@ -308,7 +334,9 @@ class WarmstartBenchmark(OptimizationBenchmark):
             self.warmstart_results.extend(results_list)
 
         print(f"\n{'=' * 70}")
-        print(f"✓ Warmstart benchmark complete! {len(self.warmstart_results)} results collected.")
+        print(
+            f"✓ Warmstart benchmark complete! {len(self.warmstart_results)} results collected."
+        )
         print(f"{'=' * 70}\n")
 
         return self
@@ -370,7 +398,9 @@ class WarmstartBenchmark(OptimizationBenchmark):
                     WarmstartBenchmarkResult(
                         solver_type=solver_type,
                         config_name=config_name,
-                        warmstart_strategy=warmstart_strat if warmstart_strat is not None else "none",
+                        warmstart_strategy=warmstart_strat
+                        if warmstart_strat is not None
+                        else "none",
                         problem_id=problem["problem_id"],
                         sequence_id=sequence["sequence_id"],
                         sequence_type=sequence["sequence_type"],
@@ -395,7 +425,9 @@ class WarmstartBenchmark(OptimizationBenchmark):
                     WarmstartBenchmarkResult(
                         solver_type=solver_type,
                         config_name=config_name,
-                        warmstart_strategy=warmstart_strat if warmstart_strat is not None else "none",
+                        warmstart_strategy=warmstart_strat
+                        if warmstart_strat is not None
+                        else "none",
                         problem_id=problem["problem_id"],
                         sequence_id=sequence["sequence_id"],
                         sequence_type=sequence["sequence_type"],
@@ -432,11 +464,17 @@ class WarmstartBenchmark(OptimizationBenchmark):
         print("=" * 70)
 
         # Group by warmstart strategy and compute aggregates
-        warmstart_stats = df.groupby("warmstart_strategy").agg({
-            "iterations": ["mean", "median", "std"],
-            "time_ms": ["mean", "median", "std"],
-            "converged": lambda x: 100 * x.mean(),
-        }).round(3)
+        warmstart_stats = (
+            df.groupby("warmstart_strategy")
+            .agg(
+                {
+                    "iterations": ["mean", "median", "std"],
+                    "time_ms": ["mean", "median", "std"],
+                    "converged": lambda x: 100 * x.mean(),
+                }
+            )
+            .round(3)
+        )
 
         # Compute speedup relative to no warmstart
         if "none" in df["warmstart_strategy"].values:
@@ -461,11 +499,17 @@ class WarmstartBenchmark(OptimizationBenchmark):
                 strat_iter = strat_df["iterations"].median()
 
                 time_speedup = baseline_time / strat_time if strat_time > 0 else np.inf
-                iter_reduction = 100 * (1 - strat_iter / baseline_iter) if baseline_iter > 0 else 0
+                iter_reduction = (
+                    100 * (1 - strat_iter / baseline_iter) if baseline_iter > 0 else 0
+                )
 
                 print(f"{strat}:")
-                print(f"  Median time: {strat_time:.3f} ms ({time_speedup:.2f}x speedup)")
-                print(f"  Median iterations: {strat_iter:.1f} ({iter_reduction:+.1f}% change)")
+                print(
+                    f"  Median time: {strat_time:.3f} ms ({time_speedup:.2f}x speedup)"
+                )
+                print(
+                    f"  Median iterations: {strat_iter:.1f} ({iter_reduction:+.1f}% change)"
+                )
                 print()
 
         print("\n" + "=" * 70)
@@ -488,12 +532,16 @@ class WarmstartBenchmark(OptimizationBenchmark):
         # For each configuration, find the best warmstart strategy
         best_strategies = []
 
-        for (solver_type, config_name), group in df.groupby(["solver_type", "config_name"]):
-            warmstart_comparison = group.groupby("warmstart_strategy").agg({
-                "time_ms": "median",
-                "iterations": "median",
-                "converged": lambda x: 100 * x.mean(),
-            })
+        for (solver_type, config_name), group in df.groupby(
+            ["solver_type", "config_name"]
+        ):
+            warmstart_comparison = group.groupby("warmstart_strategy").agg(
+                {
+                    "time_ms": "median",
+                    "iterations": "median",
+                    "converged": lambda x: 100 * x.mean(),
+                }
+            )
 
             best_strat = warmstart_comparison["time_ms"].idxmin()
             best_time = warmstart_comparison.loc[best_strat, "time_ms"]
@@ -505,13 +553,15 @@ class WarmstartBenchmark(OptimizationBenchmark):
             else:
                 speedup = np.nan
 
-            best_strategies.append({
-                "solver_type": solver_type,
-                "config_name": config_name,
-                "best_warmstart": best_strat,
-                "best_time_ms": best_time,
-                "speedup": speedup,
-            })
+            best_strategies.append(
+                {
+                    "solver_type": solver_type,
+                    "config_name": config_name,
+                    "best_warmstart": best_strat,
+                    "best_time_ms": best_time,
+                    "speedup": speedup,
+                }
+            )
 
         best_df = pd.DataFrame(best_strategies).sort_values("speedup", ascending=False)
 
@@ -533,7 +583,9 @@ class WarmstartBenchmark(OptimizationBenchmark):
             print(f"\nOverall winner: {winner} ({win_rate:.1f}% of configurations)")
 
             if win_rate > 50:
-                print(f"✓ Clear winner: {winner} is best for majority of configurations")
+                print(
+                    f"✓ Clear winner: {winner} is best for majority of configurations"
+                )
             else:
                 print(f"⚠ No clear winner: best strategy varies by configuration")
 
@@ -567,15 +619,23 @@ class WarmstartBenchmark(OptimizationBenchmark):
             baseline_df = solver_df[solver_df["warmstart_strategy"] == "none"]
 
             if len(baseline_df) == 0:
-                print(f"\nWarning: No 'none' warmstart data for {solver_type}, using all data")
+                print(
+                    f"\nWarning: No 'none' warmstart data for {solver_type}, using all data"
+                )
                 baseline_df = solver_df
 
             # Rank configs by median time
-            config_performance = baseline_df.groupby("config_name").agg({
-                "time_ms": "median",
-                "iterations": "median",
-                "converged": lambda x: 100 * x.mean(),
-            }).sort_values("time_ms")
+            config_performance = (
+                baseline_df.groupby("config_name")
+                .agg(
+                    {
+                        "time_ms": "median",
+                        "iterations": "median",
+                        "converged": lambda x: 100 * x.mean(),
+                    }
+                )
+                .sort_values("time_ms")
+            )
 
             top_config_names = config_performance.head(top_n).index.tolist()
 
@@ -583,17 +643,23 @@ class WarmstartBenchmark(OptimizationBenchmark):
             for i, config_name in enumerate(top_config_names, 1):
                 stats = config_performance.loc[config_name]
                 print(f"  {i}. {config_name}")
-                print(f"     Time: {stats['time_ms']:.3f} ms, Iter: {stats['iterations']:.1f}, Conv: {stats['converged']:.1f}%")
+                print(
+                    f"     Time: {stats['time_ms']:.3f} ms, Iter: {stats['iterations']:.1f}, Conv: {stats['converged']:.1f}%"
+                )
 
             top_configs.extend([(solver_type, cn) for cn in top_config_names])
 
         # Filter dataframe
-        mask = df.apply(lambda row: (row['solver_type'], row['config_name']) in top_configs, axis=1)
+        mask = df.apply(
+            lambda row: (row["solver_type"], row["config_name"]) in top_configs, axis=1
+        )
         filtered_df = df[mask].copy()
 
         print(f"\n{'=' * 70}")
         print(f"Filtered from {len(df)} to {len(filtered_df)} results")
-        print(f"Kept {len(top_configs)} configurations out of {df['config_name'].nunique()}")
+        print(
+            f"Kept {len(top_configs)} configurations out of {df['config_name'].nunique()}"
+        )
         print(f"{'=' * 70}")
 
         return filtered_df
@@ -608,10 +674,12 @@ class WarmstartBenchmark(OptimizationBenchmark):
         print("=" * 70)
 
         # Group by warmstart strategy and position
-        position_stats = df.groupby(["warmstart_strategy", "point_in_sequence"]).agg({
-            "iterations": "median",
-            "time_ms": "median",
-        })
+        position_stats = df.groupby(["warmstart_strategy", "point_in_sequence"]).agg(
+            {
+                "iterations": "median",
+                "time_ms": "median",
+            }
+        )
 
         print("\nMedian iterations by position (first 5 positions):")
         for strat in sorted(df["warmstart_strategy"].unique()):
@@ -622,7 +690,9 @@ class WarmstartBenchmark(OptimizationBenchmark):
 
         return position_stats
 
-    def plot_warmstart_comparison(self, df: pd.DataFrame = None, save_prefix: str = None):
+    def plot_warmstart_comparison(
+        self, df: pd.DataFrame = None, save_prefix: str = None
+    ):
         """Generate comparison plots for warmstart strategies"""
         import matplotlib.pyplot as plt
 
@@ -642,7 +712,9 @@ class WarmstartBenchmark(OptimizationBenchmark):
 
         # 2. Median iterations by warmstart strategy
         ax = axes[0, 1]
-        iter_stats = df.groupby("warmstart_strategy")["iterations"].median().sort_values()
+        iter_stats = (
+            df.groupby("warmstart_strategy")["iterations"].median().sort_values()
+        )
         iter_stats.plot(kind="barh", ax=ax, color="coral")
         ax.set_xlabel("Median Iterations")
         ax.set_title("Iterations by Warmstart Strategy")
@@ -663,7 +735,14 @@ class WarmstartBenchmark(OptimizationBenchmark):
         for strat in sorted(df["warmstart_strategy"].unique()):
             strat_df = df[df["warmstart_strategy"] == strat]
             position_stats = strat_df.groupby("point_in_sequence")["time_ms"].median()
-            ax.plot(position_stats.index, position_stats.values, "o-", label=strat, linewidth=2, markersize=4)
+            ax.plot(
+                position_stats.index,
+                position_stats.values,
+                "o-",
+                label=strat,
+                linewidth=2,
+                markersize=4,
+            )
         ax.set_xlabel("Position in Sequence")
         ax.set_ylabel("Median Time (ms)")
         ax.set_title("Time Evolution Through Sequence")
@@ -680,7 +759,10 @@ class WarmstartBenchmark(OptimizationBenchmark):
         plt.show()
 
     def generate_warmstart_report(
-        self, df: pd.DataFrame = None, save_prefix: str = "warmstart_bench", top_n: int = 5
+        self,
+        df: pd.DataFrame = None,
+        save_prefix: str = "warmstart_bench",
+        top_n: int = 5,
     ):
         """
         Generate complete warmstart analysis report.
@@ -719,13 +801,17 @@ class WarmstartBenchmark(OptimizationBenchmark):
         best_df_filtered = self.analyze_warmstart_by_config(filtered_df)
 
         # 5. By position in sequence
-        print(f"\n[5/7] Analyzing warmstart by sequence position (top {top_n} configs)...")
+        print(
+            f"\n[5/7] Analyzing warmstart by sequence position (top {top_n} configs)..."
+        )
         self.analyze_warmstart_by_position(filtered_df)
 
         # 6. Generate plots
         print(f"\n[6/7] Generating comparison plots...")
         self.plot_warmstart_comparison(df, save_prefix=f"{save_prefix}_all")
-        self.plot_warmstart_comparison(filtered_df, save_prefix=f"{save_prefix}_top{top_n}")
+        self.plot_warmstart_comparison(
+            filtered_df, save_prefix=f"{save_prefix}_top{top_n}"
+        )
 
         # 7. Save results
         print("\n[7/7] Saving results...")
@@ -816,7 +902,12 @@ def run_standard_warmstart_benchmark(
     n_problems: int = 10,
     n_sequences: int = 20,
     sequence_length: int = 15,
-    sequence_types: List[str] = ["random_walk", "interpolation", "spiral", "perturbation"],
+    sequence_types: List[str] = [
+        "random_walk",
+        "interpolation",
+        "spiral",
+        "perturbation",
+    ],
     top_n: int = 5,
     n_jobs: int = -1,
     verbose: int = 10,
@@ -858,7 +949,12 @@ def run_gsbest_warmstart_benchmark(
     n_problems: int = 30,
     n_sequences: int = 20,
     sequence_length: int = 15,
-    sequence_types: List[str] = ["random_walk", "interpolation", "spiral", "perturbation"],
+    sequence_types: List[str] = [
+        "random_walk",
+        "interpolation",
+        "spiral",
+        "perturbation",
+    ],
     top_n: int = 5,
     n_jobs: int = -1,
     verbose: int = 10,
@@ -891,6 +987,7 @@ def run_gsbest_warmstart_benchmark(
 
     return benchmark, df, best_all, best_top, filtered_df
 
+
 # ====================================================================================
 # COMMAND LINE INTERFACE
 # ====================================================================================
@@ -917,10 +1014,19 @@ def main():
     parser.add_argument("--n-vertice-max", type=int, default=None)
     parser.add_argument("--mu-min", type=float, default=None)
     parser.add_argument("--mu-max", type=float, default=None)
-    parser.add_argument("--n-problems", type=int, default=None, help="Number of polygons to generate")
-    parser.add_argument("--n-sequences", type=int, default=None, help="Number of point sequences")
+    parser.add_argument(
+        "--n-problems", type=int, default=None, help="Number of polygons to generate"
+    )
+    parser.add_argument(
+        "--n-sequences", type=int, default=None, help="Number of point sequences"
+    )
     parser.add_argument("--sequence-length", type=int, default=None)
-    parser.add_argument("--top-n", type=int, default=None, help="Number of top configs to analyze in detail")
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=None,
+        help="Number of top configs to analyze in detail",
+    )
     parser.add_argument("--n-jobs", type=int, default=-1)
     parser.add_argument("--verbose", type=int, default=10)
 
@@ -949,11 +1055,17 @@ def main():
         kwargs["top_n"] = args.top_n
 
     if args.benchmark == "quick":
-        benchmark, df, best_all, best_top, filtered_df = run_quick_warmstart_test(**kwargs)
-    elif  args.benchmark == "standard":
-        benchmark, df, best_all, best_top, filtered_df = run_standard_warmstart_benchmark(**kwargs)
-    elif  args.benchmark == "gsbest":
-        benchmark, df, best_all, best_top, filtered_df = run_gsbest_warmstart_benchmark(**kwargs)
+        benchmark, df, best_all, best_top, filtered_df = run_quick_warmstart_test(
+            **kwargs
+        )
+    elif args.benchmark == "standard":
+        benchmark, df, best_all, best_top, filtered_df = (
+            run_standard_warmstart_benchmark(**kwargs)
+        )
+    elif args.benchmark == "gsbest":
+        benchmark, df, best_all, best_top, filtered_df = run_gsbest_warmstart_benchmark(
+            **kwargs
+        )
 
     return benchmark, df, best_all, best_top, filtered_df
 

@@ -306,7 +306,7 @@ class OptimizationBenchmark:
                         configs[config_name] = config
 
         elif mode == "GS_best":
-            for alpha in [.9, .95, .99, 1., 1.01, 1.1]:
+            for alpha in [0.9, 0.95, 0.99, 1.0, 1.01, 1.1]:
                 name_parts = ["PGD_fista_restart_precond"]
                 name_parts.append(f"alpha_{alpha}")
                 config_name = "_".join(name_parts)
@@ -533,9 +533,7 @@ class OptimizationBenchmark:
 
         elif mode == "GS_best":
             for alpha, dual_momentum, rho_adaptive_fraction in product(
-                [1.0, 1.1, 1.2],
-                [0.0, 0.2, 0.4],
-                [0.2, 0.3, 0.4]
+                [1.0, 1.1, 1.2], [0.0, 0.2, 0.4], [0.2, 0.3, 0.4]
             ):
                 name_parts = ["ADMM"]
                 name_parts.append("osqp")
@@ -1894,6 +1892,7 @@ def run_gridsearch_benchmark(
 
     return benchmark, df
 
+
 def run_gsbest_benchmark(
     n_vertice_min: int = 3,
     n_vertice_max: int = 25,
@@ -1927,6 +1926,7 @@ def run_gsbest_benchmark(
     benchmark.generate_full_report(df, save_prefix="gsbest")
 
     return benchmark, df
+
 
 # ====================================================================================
 # COMMAND LINE INTERFACE
